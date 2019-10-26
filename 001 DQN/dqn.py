@@ -2,67 +2,8 @@ import torch
 import numpy as np
 import random
 import pickle
-
-class MazeEnv:
-
-    def __init__(self):
-
-        self.MAP = [
-            "SXE",
-            ".X.",
-            "..."
-        ]
-        self.ACT = [ 0, 1, 2, 3 ] # left right up down
-        self.ACTDELTA = [[0, -1], [0, 1], [-1, 0], [1, 0]]
-        self.INIT_STATE = 0
-        def find_start():
-            for i in self.MAP:
-                for j in i:
-                    if j == 'S':
-                        return
-                    self.INIT_STATE += 1
-        find_start()
-        self.step_results = []
-
-    def get_init_state(self):
-        return self.statenum2state(self.INIT_STATE)
-
-    def statenum2state(self, num):
-        return np.array(np.array(range(len(self.MAP) * len(self.MAP[0]))) == num, dtype='float')
-
-    def get_reward(self, state, act):
-        state = np.argmax(state)
-        x = state // len(self.MAP[0])
-        y = state % len(self.MAP[0])
-        xx = x + self.ACTDELTA[act][0]
-        yy = y + self.ACTDELTA[act][1]
-        if xx < 0 or xx >= len(self.MAP) or yy < 0 or yy >= len(self.MAP[0]): # hit border
-            return self.statenum2state(x * len(self.MAP[0]) + y), -1
-        if self.MAP[xx][yy] == 'X': # hit wall
-            return self.statenum2state(x * len(self.MAP[0]) + y), -1
-        if self.MAP[xx][yy] == 'E': # enter exit
-            return self.statenum2state(xx * len(self.MAP[0]) + yy), 1
-        # normal move
-        return self.statenum2state(xx * len(self.MAP[0]) + yy), -1
-
-    def is_terminal(self, state, epoch, step, print_step = False, print_terminal = True, time_delay = 0):
-        state = np.argmax(state)
-        x = state // len(self.MAP[0])
-        y = state % len(self.MAP[0])
-        ist = self.MAP[x][y] == 'E'
-        if ist:
-            if print_terminal:
-                print('Epoch %3d, %4d steps' % (epoch, step))
-            self.step_results.append(step)
-        elif print_step:
-            p = [x for x in self.MAP]
-            p[x] = p[x][:y] + '*' + p[x][y + 1:]
-            print('Step %d:\n%s' % (step, '\n'.join(p)))
-            time.sleep(time_delay)
-        return ist
-
-    def random_action(self, state):
-        return random.randint(0, len(self.ACT) - 1)
+import mazeenv
+import gym
 
 #input: state; output: for every action: q values
 class DQNnet(torch.nn.Module):
@@ -128,7 +69,7 @@ class DQN:
         if random.random() > eps:
             if action == None:
                 q = self.model_run(torch.tensor(state).float())
-            return self.env.random_action(state), q
+            return self.env.action_space.sample(), q
         if action != None:
             return action, q
         q = self.model_run(torch.tensor(state).float())
@@ -156,14 +97,14 @@ class DQN:
                 self.model_run.load_state_dict(self.model_update.state_dict())
     
     def sampling(self, epoch):
-        state = self.env.get_init_state()
+        state = self.env.reset()
+        init_state = state
         action, state_q = self.get_action(state, self.EPS)
         step = 0
         while True:
             step += 1
-            next_s, reward = self.env.get_reward(state, action)
+            next_s, reward, ist, _ = self.env.step(action)
             next_a, next_s_q = self.get_action(next_s, 1)
-            ist = self.env.is_terminal(next_s, epoch, step)
             if ist:
                 self.update_q(state, action, torch.tensor(reward).float())
             else:
@@ -171,9 +112,12 @@ class DQN:
                 state_q[action] += self.ALPHA * delta
                 self.update_q(state, action, torch.tensor(state_q[action].item()))
             if ist:
+                print('Epoch %3d, %4d steps' % (epoch, step), self.model_update(torch.tensor(init_state).float()))
+                '''
                 for i in range(9):
                     i = torch.tensor(np.array(np.array(range(9)) == i, dtype='float')).float()
                     print(self.model_update(i))
+                '''
                 break
             state = next_s
             action, state_q = self.get_action(state, self.EPS, next_a, next_s_q)
@@ -182,10 +126,19 @@ class DQN:
         for ep in range(self.EPOCH):
             self.sampling(ep)
         
+# MazeEnv
 inputlen = 9
 cnn = []
 fc = [9, 100, 10, 4]
+env = mazeenv.MazeEnv()
 
-dqn = DQN(MazeEnv(), inputlen, cnn, fc, replay = 1000, update_round = 1)
+# CartPole
+inputlen = 4
+cnn = []
+fc = [4, 100, 10, 2]
+env = gym.make("CartPole-v0")
+env = env.unwrapped
+
+dqn = DQN(env, inputlen, cnn, fc, epoch = 100000, replay = 2000, update_round = 100)
 
 dqn.main()
