@@ -34,7 +34,7 @@ class DQNnet(torch.nn.Module):
         for cnn in self.cnn:
             x = cnn(x)
             #print(x.shape)
-        x = x.reshape(-1)
+        x = x.reshape(x.shape[0], -1)
         for fc in self.fc:
             x = fc(x)
             #print(x.shape)
@@ -44,7 +44,7 @@ class DQN:
     def __init__(self, env, inputlen, cnn, fc, 
                  alpha = 0.1, gamma = 0.95, eps = 0.9, 
                  epoch = 1000, replay = 1000000, update_round = 10000,
-                 learning_rate = 0.001
+                 learning_rate = 0.001, batch_size = 128
                 ):
         self.env = env
         self.ALPHA = alpha
@@ -58,8 +58,11 @@ class DQN:
         self.model_run.load_state_dict(self.model_update.state_dict())
         self.update_count = 0
         self.replay_count = 0
-        self.replay = []
+        self.replay_state = []
+        self.replay_action = []
+        self.replay_reward = []
         self.LR = learning_rate
+        self.BATCH_SIZE = batch_size
         self.opt = torch.optim.Adam(self.model_update.parameters(), learning_rate)
         self.loss = torch.nn.MSELoss()
         self.model_run.eval()
@@ -68,28 +71,41 @@ class DQN:
     def get_action(self, state, eps, action = None, q = None):
         if random.random() > eps:
             if action == None:
-                q = self.model_run(torch.tensor(state).float())
+                q = self.model_run(torch.tensor([state]).float())[0]
             return self.env.action_space.sample(), q
         if action != None:
             return action, q
-        q = self.model_run(torch.tensor(state).float())
+        q = self.model_run(torch.tensor([state]).float())[0]
         return torch.argmax(q).item(), q
 
     def real_update_q(self, state, action, reward):
         #print('real update q', state, action, reward)
         self.opt.zero_grad()
         q = self.model_update(torch.tensor(state).float())
-        L = self.loss(q[action], reward)
+        action = action.reshape(action.shape[0], 1)
+        reward = reward.reshape(action.shape[0], 1)
+        L = self.loss(q.gather(1, action), reward)
         L.backward()
         self.opt.step()
 
     def update_q(self, state, action, reward):
-        if len(self.replay) < self.REPLAY:
-            self.replay.append([state, action, reward])
+        if len(self.replay_state) < self.REPLAY:
+            #self.replay.append([state, action, reward])
+            self.replay_state.append(state)
+            self.replay_action.append(action)
+            self.replay_reward.append(reward)
+            if len(self.replay_state) == self.REPLAY:
+                self.replay_state = np.array(self.replay_state)
+                self.replay_action = torch.tensor(self.replay_action).long()
+                self.replay_reward = torch.tensor(self.replay_reward).float()
+                #print(self.replay_state.dtype, self.replay_action.dtype, self.replay_reward.dtype)
         else:
             self.replay_count = (self.replay_count + 1) % self.REPLAY
-            self.replay[self.replay_count] = [state, action, reward]
-            self.real_update_q(*self.replay[random.randint(0, self.REPLAY - 1)])
+            self.replay_state[self.replay_count] = state
+            self.replay_action[self.replay_count] = action
+            self.replay_reward[self.replay_count] = reward
+            choice = np.random.permutation(self.REPLAY)[:self.BATCH_SIZE]
+            self.real_update_q(self.replay_state[choice], self.replay_action[choice], self.replay_reward[choice])
             #self.real_update_q(*self.replay[self.replay_count])
             self.update_count = (self.update_count + 1) % self.UPDATE
             if self.update_count == 0:
@@ -112,7 +128,7 @@ class DQN:
                 state_q[action] += self.ALPHA * delta
                 self.update_q(state, action, torch.tensor(state_q[action].item()))
             if ist:
-                print('Epoch %3d, %4d steps' % (epoch, step), self.model_update(torch.tensor(init_state).float()))
+                print('Epoch %6d, %6d steps' % (epoch, step), self.model_update(torch.tensor([init_state]).float())[0])
                 '''
                 for i in range(9):
                     i = torch.tensor(np.array(np.array(range(9)) == i, dtype='float')).float()
