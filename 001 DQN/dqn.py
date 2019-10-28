@@ -75,15 +75,11 @@ class DQN:
         if type(reward_func) == type(None):
             self.reward_func = lambda env, state, reward: reward
 
-    def get_action(self, state, eps, action = None, q = None):
-        if random.random() > eps:
-            if action == None:
-                q = self.model_update(torch.tensor([state]).float())[0]
-            return self.env.action_space.sample(), q
-        if action != None:
-            return action, q
+    def get_action(self, state):
+        if random.random() > self.EPS:
+            return self.env.action_space.sample()
         q = self.model_update(torch.tensor([state]).float())[0]
-        return torch.argmax(q).item(), q
+        return torch.argmax(q).item()
 
     def real_update_q(self, state, action, reward, next_s, ist):
         #print('real update q', state, action, reward)
@@ -132,13 +128,12 @@ class DQN:
     def sampling(self, epoch):
         state = self.env.reset()
         init_state = state
-        action, state_q = self.get_action(state, self.EPS)
+        action = self.get_action(state)
         step = 0
         while True:
             step += 1
             next_s, reward, ist, _ = self.env.step(action)
             reward = self.reward_func(self.env, next_s, reward)
-            next_a, next_s_q = self.get_action(next_s, 1)
             self.update_q(state, action, torch.tensor(reward).float(), next_s, 1 if ist else 0)
             if ist:
                 print('Epoch %6d, %6d steps' % (epoch, step), self.model_update(torch.tensor([init_state]).float())[0])
@@ -149,7 +144,7 @@ class DQN:
                 '''
                 break
             state = next_s
-            action, state_q = self.get_action(state, self.EPS, next_a, next_s_q)
+            action = self.get_action(state)
     
     def main(self):
         for ep in range(self.EPOCH):
