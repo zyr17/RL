@@ -55,19 +55,21 @@ class DQN:
         self.EPOCH = epoch
         self.REPLAY = replay
         self.UPDATE = update_round
-        self.model_run = DQNnet(inputlen, cnn, fc)
+        self.model_old = DQNnet(inputlen, cnn, fc)
         self.model_update = DQNnet(inputlen, cnn, fc)
-        self.model_run.load_state_dict(self.model_update.state_dict())
+        self.model_old.load_state_dict(self.model_update.state_dict())
         self.update_count = 0
         self.replay_count = 0
         self.replay_state = []
         self.replay_action = []
         self.replay_reward = []
+        self.replay_next_s = []
+        self.replay_ist = []
         self.LR = learning_rate
         self.BATCH_SIZE = batch_size
         self.opt = torch.optim.Adam(self.model_update.parameters(), learning_rate)
         self.loss = torch.nn.MSELoss()
-        self.model_run.eval()
+        self.model_old.eval()
         self.model_update.train()
         self.reward_func = reward_func
         if type(reward_func) == type(None):
@@ -76,46 +78,56 @@ class DQN:
     def get_action(self, state, eps, action = None, q = None):
         if random.random() > eps:
             if action == None:
-                q = self.model_run(torch.tensor([state]).float())[0]
+                q = self.model_update(torch.tensor([state]).float())[0]
             return self.env.action_space.sample(), q
         if action != None:
             return action, q
-        q = self.model_run(torch.tensor([state]).float())[0]
+        q = self.model_update(torch.tensor([state]).float())[0]
         return torch.argmax(q).item(), q
 
-    def real_update_q(self, state, action, reward):
+    def real_update_q(self, state, action, reward, next_s, ist):
         #print('real update q', state, action, reward)
         self.opt.zero_grad()
-        q = self.model_update(torch.tensor(state).float())
+        state = torch.tensor(state).float()
+        next_s = torch.tensor(next_s).float()
+        q = self.model_update(state)
         action = action.reshape(action.shape[0], 1)
-        reward = reward.reshape(action.shape[0], 1)
-        L = self.loss(q.gather(1, action), reward)
+        next_q = self.model_old(next_s).max(dim = 1)[0]
+        reward_b = reward + self.GAMMA * next_q * torch.tensor(1 - ist).float()
+        reward_b = reward_b.reshape(reward_b.shape[0], 1)
+        L = self.loss(q.gather(1, action), reward_b)
         L.backward()
         self.opt.step()
 
-    def update_q(self, state, action, reward):
+    def update_q(self, state, action, reward, next_s, ist):
         if len(self.replay_state) < self.REPLAY:
             #self.replay.append([state, action, reward])
             self.replay_state.append(state)
             self.replay_action.append(action)
             self.replay_reward.append(reward)
+            self.replay_next_s.append(next_s)
+            self.replay_ist.append(ist)
             if len(self.replay_state) == self.REPLAY:
                 self.replay_state = np.array(self.replay_state)
                 self.replay_action = torch.tensor(self.replay_action).long()
                 self.replay_reward = torch.tensor(self.replay_reward).float()
+                self.replay_next_s = np.array(self.replay_next_s)
+                self.replay_ist = np.array(self.replay_ist)
                 #print(self.replay_state.dtype, self.replay_action.dtype, self.replay_reward.dtype)
         else:
             self.replay_count = (self.replay_count + 1) % self.REPLAY
             self.replay_state[self.replay_count] = state
             self.replay_action[self.replay_count] = action
             self.replay_reward[self.replay_count] = reward
+            self.replay_next_s[self.replay_count] = next_s
+            self.replay_ist[self.replay_count] = ist
             choice = np.random.permutation(self.REPLAY)[:self.BATCH_SIZE]
-            self.real_update_q(self.replay_state[choice], self.replay_action[choice], self.replay_reward[choice])
+            self.real_update_q(self.replay_state[choice], self.replay_action[choice], self.replay_reward[choice], self.replay_next_s[choice], self.replay_ist[choice])
             #self.real_update_q(*self.replay[self.replay_count])
             self.update_count = (self.update_count + 1) % self.UPDATE
             if self.update_count == 0:
                 #print('update model')
-                self.model_run.load_state_dict(self.model_update.state_dict())
+                self.model_old.load_state_dict(self.model_update.state_dict())
     
     def sampling(self, epoch):
         state = self.env.reset()
@@ -127,12 +139,7 @@ class DQN:
             next_s, reward, ist, _ = self.env.step(action)
             reward = self.reward_func(self.env, next_s, reward)
             next_a, next_s_q = self.get_action(next_s, 1)
-            if ist:
-                self.update_q(state, action, torch.tensor(reward).float())
-            else:
-                delta = reward + self.GAMMA * next_s_q[next_a] - state_q[action]
-                state_q[action] += self.ALPHA * delta
-                self.update_q(state, action, torch.tensor(state_q[action].item()))
+            self.update_q(state, action, torch.tensor(reward).float(), next_s, 1 if ist else 0)
             if ist:
                 print('Epoch %6d, %6d steps' % (epoch, step), self.model_update(torch.tensor([init_state]).float())[0])
                 '''
