@@ -21,10 +21,12 @@ class DQNnet(torch.nn.Module):
                 torch.nn.ReLU(),
                 torch.nn.MaxPool2d(i[3], padding=i[4])
             ))
+            #self.cnn[-1].weight.data.normal_(0, 0.1)
             lastfea = i[0]
         self.fc = torch.nn.ModuleList()
         for i, j in zip(fc[:-1], fc[1:]):
             self.fc.append(torch.nn.Linear(i, j))
+            self.fc[-1].weight.data.normal_(0, 0.1)
             #torch.nn.Dropout(0.5),
             self.fc.append(torch.nn.ReLU())
         self.fc = self.fc[:-1]
@@ -44,7 +46,7 @@ class DQN:
     def __init__(self, env, inputlen, cnn, fc, 
                  alpha = 0.1, gamma = 0.95, eps = 0.9, 
                  epoch = 1000, replay = 1000000, update_round = 10000,
-                 learning_rate = 0.001, batch_size = 128
+                 learning_rate = 0.001, batch_size = 128, reward_func = None
                 ):
         self.env = env
         self.ALPHA = alpha
@@ -67,6 +69,9 @@ class DQN:
         self.loss = torch.nn.MSELoss()
         self.model_run.eval()
         self.model_update.train()
+        self.reward_func = reward_func
+        if type(reward_func) == type(None):
+            self.reward_func = lambda env, state, reward: reward
 
     def get_action(self, state, eps, action = None, q = None):
         if random.random() > eps:
@@ -120,6 +125,7 @@ class DQN:
         while True:
             step += 1
             next_s, reward, ist, _ = self.env.step(action)
+            reward = self.reward_func(self.env, next_s, reward)
             next_a, next_s_q = self.get_action(next_s, 1)
             if ist:
                 self.update_q(state, action, torch.tensor(reward).float())
@@ -154,7 +160,15 @@ cnn = []
 fc = [4, 100, 10, 2]
 env = gym.make("CartPole-v0")
 env = env.unwrapped
+def CartPole_reward_func(env, state, reward):
+    x = state[0]
+    theta = state[2]
+    r1 = (env.x_threshold - abs(x))/env.x_threshold - 0.5
+    r2 = (env.theta_threshold_radians - abs(theta)) / env.theta_threshold_radians - 0.5
+    reward = float(r1 + r2)
+    return reward
 
-dqn = DQN(env, inputlen, cnn, fc, epoch = 100000, replay = 2000, update_round = 100)
+dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.01,
+          epoch = 100000, replay = 2000, update_round = 100, reward_func = CartPole_reward_func)
 
 dqn.main()
