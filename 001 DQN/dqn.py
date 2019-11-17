@@ -4,6 +4,20 @@ import random
 import pickle
 import mazeenv
 import gym
+import time
+
+ENABLE_CUDA = True
+
+def cuda(tensor):
+    """
+    A cuda wrapper
+    """
+    if tensor is None:
+        return None
+    if torch.cuda.is_available() and ENABLE_CUDA:
+        return tensor.cuda()
+    else:
+        return tensor
 
 #input: state; output: for every action: q values
 class DQNnet(torch.nn.Module):
@@ -46,7 +60,8 @@ class DQN:
     def __init__(self, env, inputlen, cnn, fc, 
                  alpha = 0.1, gamma = 0.95, eps = 0.9, 
                  epoch = 1000, replay = 1000000, update_round = 10000,
-                 learning_rate = 0.001, batch_size = 128, reward_func = None
+                 learning_rate = 0.001, batch_size = 128, reward_func = None,
+                 render = -1
                 ):
         self.env = env
         self.ALPHA = alpha
@@ -55,8 +70,8 @@ class DQN:
         self.EPOCH = epoch
         self.REPLAY = replay
         self.UPDATE = update_round
-        self.model_old = DQNnet(inputlen, cnn, fc)
-        self.model_update = DQNnet(inputlen, cnn, fc)
+        self.model_old = cuda(DQNnet(inputlen, cnn, fc))
+        self.model_update = cuda(DQNnet(inputlen, cnn, fc))
         self.model_old.load_state_dict(self.model_update.state_dict())
         self.update_count = 0
         self.replay_count = 0
@@ -74,28 +89,37 @@ class DQN:
         self.reward_func = reward_func
         if type(reward_func) == type(None):
             self.reward_func = lambda env, state, reward: reward
+        self.render = render
 
     def get_action(self, state):
+        if len(state.shape) == 3:
+            state = state.transpose(2, 0, 1)
         if random.random() > self.EPS:
             return self.env.action_space.sample()
-        q = self.model_update(torch.tensor([state]).float())[0]
+        q = self.model_update(cuda(torch.tensor([state]).float()))[0]
         return torch.argmax(q).item()
 
     def real_update_q(self, state, action, reward, next_s, ist):
         #print('real update q', state, action, reward)
         self.opt.zero_grad()
-        state = torch.tensor(state).float()
-        next_s = torch.tensor(next_s).float()
+        state = cuda(torch.tensor(state).float())
+        action = cuda(action)
+        reward = cuda(reward)
+        next_s = cuda(torch.tensor(next_s).float())
         q = self.model_update(state)
         action = action.reshape(action.shape[0], 1)
         next_q = self.model_old(next_s).max(dim = 1)[0]
-        reward_b = reward + self.GAMMA * next_q * torch.tensor(1 - ist).float()
+        reward_b = reward + self.GAMMA * next_q * cuda(torch.tensor(1 - ist).float())
         reward_b = reward_b.reshape(reward_b.shape[0], 1)
         L = self.loss(q.gather(1, action), reward_b)
         L.backward()
         self.opt.step()
 
     def update_q(self, state, action, reward, next_s, ist):
+        if len(state.shape) == 3:
+            state = state.transpose(2, 0, 1)
+        if len(next_s.shape) == 3:
+            next_s = next_s.transpose(2, 0, 1)
         if len(self.replay_state) < self.REPLAY:
             #self.replay.append([state, action, reward])
             self.replay_state.append(state)
@@ -130,13 +154,19 @@ class DQN:
         init_state = state
         action = self.get_action(state)
         step = 0
+        tot_reward = 0
         while True:
             step += 1
+            if self.render != -1:
+                self.env.render()
+                time.sleep(self.render)
             next_s, reward, ist, _ = self.env.step(action)
             reward = self.reward_func(self.env, next_s, reward)
+            tot_reward += reward
             self.update_q(state, action, torch.tensor(reward).float(), next_s, 1 if ist else 0)
             if ist:
-                print('Epoch %6d, %6d steps' % (epoch, step), self.model_update(torch.tensor([init_state]).float())[0])
+                print('Epoch %6d, %6d steps' % (epoch, step), tot_reward)
+                #print(self.model_update(torch.tensor([init_state]).float())[0])
                 '''
                 for i in range(9):
                     i = torch.tensor(np.array(np.array(range(9)) == i, dtype='float')).float()
@@ -149,13 +179,16 @@ class DQN:
     def main(self):
         for ep in range(self.EPOCH):
             self.sampling(ep)
-        
+'''      
 # MazeEnv
 inputlen = 9
 cnn = []
 fc = [9, 100, 10, 4]
 env = mazeenv.MazeEnv()
-
+dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.01,
+          epoch = 100000, replay = 2000, update_round = 100)
+'''
+'''
 # CartPole
 inputlen = 4
 cnn = []
@@ -169,8 +202,42 @@ def CartPole_reward_func(env, state, reward):
     r2 = (env.theta_threshold_radians - abs(theta)) / env.theta_threshold_radians - 0.5
     reward = float(r1 + r2)
     return reward
-
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.01,
-          epoch = 100000, replay = 2000, update_round = 100, reward_func = CartPole_reward_func)
+          epoch = 100000, replay = 2000, update_round = 100, reward_func=CartPole_reward_func)
+'''
+'''
+#MsPacman RAM
+inputlen = 128
+cnn = []
+fc = [128, 1000, 100, 9]
+env = gym.make("MsPacman-ram-v0")
+env = env.unwrapped
+dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
+          epoch = 100000, replay = 10000, update_round = 1000, render = 0)
+'''
+'''
+#Pong RAM
+inputlen = 128
+cnn = []
+fc = [128, 1000, 100, 6]
+env = gym.make("Pong-ram-v4")
+env = env.unwrapped
+dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
+          epoch = 100000, replay = 10000, update_round = 1000, render = 0)
+'''
 
+#Pong CNN
+inputlen = 3
+cnn = [
+    (32, 5, 2, 2, 0),
+    (64, 5, 2, 2, (1, 0)),
+    #(200, 5, 2, 2, (1, 0)),
+    #(400, 5, 2, 2, (1, 0)),
+    #(800, 5, 2, 2, 0) 
+]
+fc = [53 * 40 * 64, 600, 6]
+env = gym.make("Pong-v4")
+env = env.unwrapped
+dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
+          epoch = 100000, replay = 10000, update_round = 1000, render = 0, batch_size = 16)
 dqn.main()
