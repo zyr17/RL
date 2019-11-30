@@ -32,9 +32,9 @@ class DQNnet(torch.nn.Module):
         lastfea = inputlen
         for i in cnn:
             self.cnn.append(torch.nn.Sequential(
-                torch.nn.Conv2d(lastfea, i[0], i[1], padding=i[2]),
+                torch.nn.Conv2d(lastfea, i[0], i[1], padding=i[2], stride = i[3]),
                 torch.nn.ReLU(),
-                torch.nn.MaxPool2d(i[3], padding=i[4])
+                torch.nn.MaxPool2d(i[4], padding=i[5])
             ))
             #self.cnn[-1].weight.data.normal_(0, 0.1)
             lastfea = i[0]
@@ -176,6 +176,7 @@ class DQN:
                 self.model_old.load_state_dict(self.model_update.state_dict())
     
     def sampling(self, epoch):
+        start_time = time.time()
         state = self.env.reset()
         init_state = state
         action = self.get_action(state)
@@ -191,7 +192,7 @@ class DQN:
             tot_reward += reward
             self.update_q(state, action, torch.tensor(reward).float(), next_s, 1 if ist else 0)
             if ist:
-                print('Epoch %6d, %6d steps' % (epoch, step), tot_reward)
+                print('Epoch %6d, %6d steps, %.2f steps/s' % (epoch, step, step / (time.time() - start_time)), tot_reward)
                 #print(self.model_update(torch.tensor([init_state]).float())[0])
                 '''
                 for i in range(9):
@@ -256,15 +257,15 @@ dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
 #Pong CNN
 inputlen = 3
 cnn = [
-    (32, 5, 2, 2, 0),
-    (64, 5, 2, 2, (1, 0)),
+    (32, 5, 2, 2, 2, 0), # 52x40
+    (64, 5, 2, 2, 2, (1, 0)), # 14x10
     #(200, 5, 2, 2, (1, 0)),
     #(400, 5, 2, 2, (1, 0)),
     #(800, 5, 2, 2, 0) 
 ]
-fc = [53 * 40 * 64, 600, 6]
+fc = [14 * 10 * 64, 256, 6]
 env = gym.make("Pong-v4")
 env = env.unwrapped
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001, eps = [0.95, 0.01, 0.01],
-          epoch = 100000, replay = 1000, update_round = 1000, render = 0, batch_size = 16)
+          epoch = 100000, replay = 10000, update_round = 1000, render = 0, batch_size = 32)
 dqn.main()
