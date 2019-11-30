@@ -5,6 +5,7 @@ import pickle
 import mazeenv
 import gym
 import time
+import collections
 
 ENABLE_CUDA = True
 
@@ -82,6 +83,7 @@ class DQN:
         self.model_old.load_state_dict(self.model_update.state_dict())
         self.update_count = 0
         self.replay_count = 0
+        self.replay_data = collections.deque(maxlen = replay)
         self.replay_state = []
         self.replay_action = []
         self.replay_reward = []
@@ -108,11 +110,16 @@ class DQN:
         return torch.argmax(q).item()
 
     def real_update_q(self, state, action, reward, next_s, ist):
+        state = np.array(state)
+        action = np.array(action)
+        reward = np.array(reward)
+        next_s = np.array(next_s)
+        ist = np.array(ist)
         #print('real update q', state, action, reward)
         self.opt.zero_grad()
         state = cuda(torch.tensor(state).float())
-        action = cuda(action)
-        reward = cuda(reward)
+        action = cuda(torch.tensor(action).long())
+        reward = cuda(torch.tensor(reward).float())
         next_s = cuda(torch.tensor(next_s).float())
         q = self.model_update(state)
         action = action.reshape(action.shape[0], 1)
@@ -130,6 +137,7 @@ class DQN:
         if len(next_s.shape) == 3:
             next_s = next_s / 255
             next_s = next_s.transpose(2, 0, 1)
+        '''
         if len(self.replay_state) < self.REPLAY:
             #self.replay.append([state, action, reward])
             self.replay_state.append(state)
@@ -157,6 +165,14 @@ class DQN:
             self.update_count = (self.update_count + 1) % self.UPDATE
             if self.update_count == 0:
                 #print('update model')
+                self.model_old.load_state_dict(self.model_update.state_dict())
+        '''
+        self.replay_data.append([state, action, reward, next_s, ist])
+        if len(self.replay_data) == self.REPLAY:
+            choice = np.random.choice(self.REPLAY, self.BATCH_SIZE, replace = False)
+            self.real_update_q(*zip(*[self.replay_data[x] for x in choice]))
+            self.update_count = (self.update_count + 1) % self.UPDATE
+            if self.update_count == 0:
                 self.model_old.load_state_dict(self.model_update.state_dict())
     
     def sampling(self, epoch):
@@ -250,5 +266,5 @@ fc = [53 * 40 * 64, 600, 6]
 env = gym.make("Pong-v4")
 env = env.unwrapped
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001, eps = [0.95, 0.01, 0.01],
-          epoch = 100000, replay = 10000, update_round = 1000, render = 0, batch_size = 16)
+          epoch = 100000, replay = 1000, update_round = 1000, render = 0, batch_size = 16)
 dqn.main()
