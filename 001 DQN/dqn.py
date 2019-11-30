@@ -6,6 +6,7 @@ import mazeenv
 import gym
 import time
 import collections
+import cv2
 
 ENABLE_CUDA = True
 
@@ -19,6 +20,56 @@ def cuda(tensor):
         return tensor.cuda()
     else:
         return tensor
+
+class SkipFrame(gym.ObservationWrapper):
+    def __init__(self, env, skip_number = 4):
+        super(SkipFrame, self).__init__(env)
+        self.SKIP = skip_number
+    def reset(self):
+        state = self.env.reset()
+        self.COUNTER = self.SKIP
+        return state
+    def step(self, action):
+        total_reward = 0
+        states = []
+        for i in range(self.SKIP):
+            state, reward, terminal, _ = self.env.step(action)
+            states.append(state)
+            total_reward += reward
+            if terminal:
+                break
+        return states[-1], total_reward, terminal, _
+                
+
+class ResizeGreyPic(gym.ObservationWrapper):
+    def __init__(self, env, size = (84, 110)):
+        super(ResizeGreyPic, self).__init__(env)
+        self.SIZE = size
+        self.observation_space = gym.spaces.Box(low = 0, high = 255, shape = (size[1], size[0]), dtype=np.uint8)
+    def observation(self, state):
+        new_s = state[:,:,0] * 0.299 + state[:,:,1] * 0.587 +state[:,:,2] * 0.114
+        state = cv2.resize(new_s, self.SIZE, interpolation = cv2.INTER_AREA)
+        return state
+
+class ChangeAxis(gym.ObservationWrapper):
+    def __init__(self, env):
+        super(ChangeAxis, self).__init__(env)
+        size = self.env.observation_space.shape
+        self.observation_space = gym.spaces.Box(low = 0, high = 255, shape = (size[2], size[0], size[1]), dtype=np.uint8)
+    def observation(self, state):
+        return state.transpose(2, 0, 1)
+
+class CollectFrame(gym.ObservationWrapper):
+    def __init__(self, env, collect_number = 4):
+        super(CollectFrame, self).__init__(env)
+        self.COLLECT = collect_number
+    def reset(self):
+        self.states = np.zeros((self.COLLECT, *self.env.observation_space.shape), dtype='float')
+        return self.observation(self.env.reset())
+    def observation(self, state):
+        self.states[:-1] = self.states[1:]
+        self.states[-1] = state
+        return self.states
 
 #input: state; output: for every action: q values
 class DQNnet(torch.nn.Module):
@@ -101,9 +152,6 @@ class DQN:
         self.render = render
 
     def get_action(self, state):
-        if len(state.shape) == 3:
-            state = state / 255
-            state = state.transpose(2, 0, 1)
         if random.random() < self.EPS:
             return self.env.action_space.sample()
         q = self.model_update(cuda(torch.tensor([state]).float()))[0]
@@ -131,12 +179,6 @@ class DQN:
         self.opt.step()
 
     def update_q(self, state, action, reward, next_s, ist):
-        if len(state.shape) == 3:
-            state = state / 255
-            state = state.transpose(2, 0, 1)
-        if len(next_s.shape) == 3:
-            next_s = next_s / 255
-            next_s = next_s.transpose(2, 0, 1)
         '''
         if len(self.replay_state) < self.REPLAY:
             #self.replay.append([state, action, reward])
@@ -255,17 +297,18 @@ dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
 '''
 
 #Pong CNN
-inputlen = 3
+inputlen = 4
 cnn = [
-    (32, 5, 2, 2, 2, 0), # 52x40
-    (64, 5, 2, 2, 2, (1, 0)), # 14x10
-    #(200, 5, 2, 2, (1, 0)),
-    #(400, 5, 2, 2, (1, 0)),
-    #(800, 5, 2, 2, 0) 
+    (32, 8, 0, 4, 1, 0),
+    (64, 4, 0, 2, 1, 0),
+    (64, 3, 0, 1, 1, 0),
 ]
-fc = [14 * 10 * 64, 256, 6]
-env = gym.make("Pong-v4")
-env = env.unwrapped
+fc = [7 * 10 * 64, 256, 6]
+env = gym.make("PongNoFrameskip-v4")
+env = SkipFrame(env)
+env = ResizeGreyPic(env)
+#env = ChangeAxis(env)
+env = CollectFrame(env)
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001, eps = [0.95, 0.01, 0.01],
-          epoch = 100000, replay = 10000, update_round = 1000, render = 0, batch_size = 32)
+          epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32)
 dqn.main()
