@@ -58,7 +58,7 @@ class DQNnet(torch.nn.Module):
 
 class DQN:
     def __init__(self, env, inputlen, cnn, fc, 
-                 alpha = 0.1, gamma = 0.95, eps = 0.9, 
+                 alpha = 0.1, gamma = 0.95, eps = 0.1, 
                  epoch = 1000, replay = 1000000, update_round = 10000,
                  learning_rate = 0.001, batch_size = 128, reward_func = None,
                  render = -1
@@ -66,7 +66,14 @@ class DQN:
         self.env = env
         self.ALPHA = alpha
         self.GAMMA = gamma
-        self.EPS = eps
+        if type(eps) == type(()) or type(eps) == type([]):
+            self.EPS = eps[0]
+            self.EPS_STEP = eps[1]
+            self.EPS_MIN = eps[2]
+        else:
+            self.EPS = self.EPS_END = eps
+            self.EPS_STEP = 0
+            self.EPS_MIN = eps
         self.EPOCH = epoch
         self.REPLAY = replay
         self.UPDATE = update_round
@@ -93,8 +100,9 @@ class DQN:
 
     def get_action(self, state):
         if len(state.shape) == 3:
+            state = state / 255
             state = state.transpose(2, 0, 1)
-        if random.random() > self.EPS:
+        if random.random() < self.EPS:
             return self.env.action_space.sample()
         q = self.model_update(cuda(torch.tensor([state]).float()))[0]
         return torch.argmax(q).item()
@@ -117,8 +125,10 @@ class DQN:
 
     def update_q(self, state, action, reward, next_s, ist):
         if len(state.shape) == 3:
+            state = state / 255
             state = state.transpose(2, 0, 1)
         if len(next_s.shape) == 3:
+            next_s = next_s / 255
             next_s = next_s.transpose(2, 0, 1)
         if len(self.replay_state) < self.REPLAY:
             #self.replay.append([state, action, reward])
@@ -179,6 +189,7 @@ class DQN:
     def main(self):
         for ep in range(self.EPOCH):
             self.sampling(ep)
+            self.EPS = max(self.EPS - self.EPS_STEP, self.EPS_MIN)
 '''      
 # MazeEnv
 inputlen = 9
@@ -238,6 +249,6 @@ cnn = [
 fc = [53 * 40 * 64, 600, 6]
 env = gym.make("Pong-v4")
 env = env.unwrapped
-dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
+dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001, eps = [0.95, 0.01, 0.01],
           epoch = 100000, replay = 10000, update_round = 1000, render = 0, batch_size = 16)
 dqn.main()
