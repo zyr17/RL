@@ -7,6 +7,7 @@ import gym
 import time
 import collections
 import cv2
+import matplotlib.pyplot as plt
 
 ENABLE_CUDA = True
 
@@ -20,6 +21,12 @@ def cuda(tensor):
         return tensor.cuda()
     else:
         return tensor
+
+def showarray(arr):
+    arr = np.array(arr)
+    print('max: %.2f, min: %.2f' % (arr.max(), arr.min()))
+    plt.imshow(arr)
+    plt.show()
 
 class SkipFrame(gym.ObservationWrapper):
     def __init__(self, env, skip_number = 4):
@@ -49,7 +56,7 @@ class ResizeGreyPic(gym.ObservationWrapper):
     def observation(self, state):
         new_s = state[:,:,0] * 0.299 + state[:,:,1] * 0.587 +state[:,:,2] * 0.114
         state = cv2.resize(new_s, self.SIZE, interpolation = cv2.INTER_AREA)
-        return state
+        return state / 255.0
 
 class ChangeAxis(gym.ObservationWrapper):
     def __init__(self, env):
@@ -155,6 +162,9 @@ class DQN:
         if random.random() < self.EPS:
             return self.env.action_space.sample()
         q = self.model_update(cuda(torch.tensor([state]).float()))[0]
+        if False and self.REPLAY == len(self.replay_data):
+            print(q, ' choice:', torch.argmax(q).item(), ' ', end = '')
+            showarray(state[-1])
         return torch.argmax(q).item()
 
     def real_update_q(self, state, action, reward, next_s, ist):
