@@ -49,12 +49,13 @@ class SkipFrame(gym.ObservationWrapper):
                 
 
 class ResizeGreyPic(gym.ObservationWrapper):
-    def __init__(self, env, size = (84, 110)):
+    def __init__(self, env, size = (84, 84)):
         super(ResizeGreyPic, self).__init__(env)
         self.SIZE = size
         self.observation_space = gym.spaces.Box(low = 0, high = 255, shape = (size[1], size[0]), dtype=np.uint8)
     def observation(self, state):
         new_s = state[:,:,0] * 0.299 + state[:,:,1] * 0.587 +state[:,:,2] * 0.114
+        new_s = new_s[:, 12:108]
         state = cv2.resize(new_s, self.SIZE, interpolation = cv2.INTER_AREA)
         return state / 255.0
 
@@ -313,7 +314,7 @@ cnn = [
     (64, 4, 0, 2, 1, 0),
     (64, 3, 0, 1, 1, 0),
 ]
-fc = [7 * 10 * 64, 256, 6]
+fc = [7 * 7 * 64, 256, 6]
 env = gym.make("PongNoFrameskip-v4")
 env = SkipFrame(env)
 env = ResizeGreyPic(env)
