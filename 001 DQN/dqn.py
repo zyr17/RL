@@ -8,6 +8,7 @@ import time
 import collections
 import cv2
 import matplotlib.pyplot as plt
+import pdb
 
 ENABLE_CUDA = True
 
@@ -45,25 +46,38 @@ class SkipFrame(gym.ObservationWrapper):
             total_reward += reward
             if terminal:
                 break
-        return states[-1], total_reward, terminal, _
+        return np.stack(states), total_reward, terminal, _
                 
 
 class ResizeGreyPic(gym.ObservationWrapper):
     def __init__(self, env, size = (84, 84)):
         super(ResizeGreyPic, self).__init__(env)
         self.SIZE = size
-        self.observation_space = gym.spaces.Box(low = 0, high = 255, shape = (size[1], size[0]), dtype=np.uint8)
+        self.observation_space = gym.spaces.Box(low = 0, high = 1, shape = (size[1], size[0]), dtype=np.float)
     def observation(self, state):
-        new_s = state[:,:,0] * 0.299 + state[:,:,1] * 0.587 +state[:,:,2] * 0.114
-        new_s = new_s[:, 12:108]
-        state = cv2.resize(new_s, self.SIZE, interpolation = cv2.INTER_AREA)
+        #print(state.shape)
+        #pdb.set_trace()
+        if len(state.shape) == 3:
+            state = state.reshape(1, *state.shape)
+        new_s_all = []
+        for s in state:
+            new_s = s[:,:,0] * 0.299 + s[:,:,1] * 0.587 + s[:,:,2] * 0.114
+            new_s = new_s[34:194, :]
+            new_s_all.append(new_s)
+        #pdb.set_trace()
+        new_s_all = np.stack(new_s_all).max(0)
+        #print(new_s_all.shape)
+        state = cv2.resize(new_s_all, self.SIZE, interpolation = cv2.INTER_AREA)
+        #plt.matshow(state)
+        #pdb.set_trace()
+        #plt.show()
         return state / 255.0
 
 class ChangeAxis(gym.ObservationWrapper):
     def __init__(self, env):
         super(ChangeAxis, self).__init__(env)
         size = self.env.observation_space.shape
-        self.observation_space = gym.spaces.Box(low = 0, high = 255, shape = (size[2], size[0], size[1]), dtype=np.uint8)
+        self.observation_space = gym.spaces.Box(low = self.env.observation_space.low, high = self.env.observation_space.high, shape = (size[2], size[0], size[1]), dtype=self.env.observation_space.dtype)
     def observation(self, state):
         return state.transpose(2, 0, 1)
 
@@ -185,6 +199,7 @@ class DQN:
         next_q = self.model_old(next_s).max(dim = 1)[0]
         reward_b = reward + self.GAMMA * next_q * cuda(torch.tensor(1 - ist).float())
         reward_b = reward_b.reshape(reward_b.shape[0], 1)
+        #reward_b = reward_b.detach()
         L = self.loss(q.gather(1, action), reward_b)
         L.backward()
         self.opt.step()
