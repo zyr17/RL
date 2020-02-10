@@ -9,6 +9,10 @@ import collections
 import cv2
 import matplotlib.pyplot as plt
 import pdb
+import tensorboardX
+TXSW = tensorboardX.SummaryWriter
+
+import wrappers
 
 ENABLE_CUDA = True
 
@@ -46,14 +50,13 @@ class SkipFrame(gym.ObservationWrapper):
             total_reward += reward
             if terminal:
                 break
-        return np.stack(states), total_reward, terminal, _
-                
+        return np.max(np.stack(states), axis = 0), total_reward, terminal, _
 
 class ResizeGreyPic(gym.ObservationWrapper):
     def __init__(self, env, size = (84, 84)):
         super(ResizeGreyPic, self).__init__(env)
         self.SIZE = size
-        self.observation_space = gym.spaces.Box(low = 0, high = 1, shape = (size[1], size[0]), dtype=np.float)
+        self.observation_space = gym.spaces.Box(low = 0, high = 1, shape = (size[1], size[0]), dtype=np.float32)
     def observation(self, state):
         #print(state.shape)
         #pdb.set_trace()
@@ -62,6 +65,7 @@ class ResizeGreyPic(gym.ObservationWrapper):
         new_s_all = []
         for s in state:
             new_s = s[:,:,0] * 0.299 + s[:,:,1] * 0.587 + s[:,:,2] * 0.114
+            #pdb.set_trace()
             new_s = new_s[34:194, :]
             new_s_all.append(new_s)
         #pdb.set_trace()
@@ -85,12 +89,18 @@ class CollectFrame(gym.ObservationWrapper):
     def __init__(self, env, collect_number = 4):
         super(CollectFrame, self).__init__(env)
         self.COLLECT = collect_number
+        #pdb.set_trace()
+        self.observation_space = gym.spaces.Box(np.expand_dims(self.env.observation_space.low, 0).repeat(collect_number, 0), 
+                                                np.expand_dims(self.env.observation_space.high, 0).repeat(collect_number, 0), 
+                                                dtype=self.env.observation_space.dtype)
+        #pdb.set_trace()
     def reset(self):
-        self.states = np.zeros((self.COLLECT, *self.env.observation_space.shape), dtype='float')
+        self.states = np.zeros((self.COLLECT, *self.env.observation_space.shape), dtype='float32')
         return self.observation(self.env.reset())
     def observation(self, state):
         self.states[:-1] = self.states[1:]
         self.states[-1] = state
+        #pdb.set_trace()
         return self.states
 
 #input: state; output: for every action: q values
@@ -120,6 +130,7 @@ class DQNnet(torch.nn.Module):
         self.fc = self.fc[:-1]
 
     def forward(self, inputs):
+        #print(inputs.shape)
         x = inputs
         for cnn in self.cnn:
             x = cnn(x)
@@ -128,6 +139,7 @@ class DQNnet(torch.nn.Module):
         for fc in self.fc:
             x = fc(x)
             #print(x.shape)
+        #pdb.set_trace()
         return x
 
 class DQN:
@@ -149,6 +161,7 @@ class DQN:
             self.EPS_STEP = 0
             self.EPS_MIN = eps
         self.EPOCH = epoch
+        self.FRAME = 0
         self.REPLAY = replay
         self.UPDATE = update_round
         self.model_old = cuda(DQNnet(inputlen, cnn, fc))
@@ -172,6 +185,8 @@ class DQN:
         if type(reward_func) == type(None):
             self.reward_func = lambda env, state, reward: reward
         self.render = render
+        self.TXSW = TXSW()
+        self.TXSW.add_graph(self.model_old, (cuda(torch.tensor(np.zeros((32, 4, 84, 84))).float()),))
 
     def get_action(self, state):
         if random.random() < self.EPS:
@@ -195,14 +210,17 @@ class DQN:
         reward = cuda(torch.tensor(reward).float())
         next_s = cuda(torch.tensor(next_s).float())
         q = self.model_update(state)
+        #print(q)
         action = action.reshape(action.shape[0], 1)
         next_q = self.model_old(next_s).max(dim = 1)[0]
+        #print(next_q)
         reward_b = reward + self.GAMMA * next_q * cuda(torch.tensor(1 - ist).float())
         reward_b = reward_b.reshape(reward_b.shape[0], 1)
         #reward_b = reward_b.detach()
         L = self.loss(q.gather(1, action), reward_b)
         L.backward()
         self.opt.step()
+        return L.item()
 
     def update_q(self, state, action, reward, next_s, ist):
         '''
@@ -238,10 +256,12 @@ class DQN:
         self.replay_data.append([state, action, reward, next_s, ist])
         if len(self.replay_data) == self.REPLAY:
             choice = np.random.choice(self.REPLAY, self.BATCH_SIZE, replace = False)
-            self.real_update_q(*zip(*[self.replay_data[x] for x in choice]))
+            loss = self.real_update_q(*zip(*[self.replay_data[x] for x in choice]))
             self.update_count = (self.update_count + 1) % self.UPDATE
             if self.update_count == 0:
                 self.model_old.load_state_dict(self.model_update.state_dict())
+            return loss
+        return None
     
     def sampling(self, epoch):
         start_time = time.time()
@@ -251,16 +271,40 @@ class DQN:
         step = 0
         tot_reward = 0
         while True:
+            self.FRAME += 1
+            self.EPS = max(self.EPS - self.EPS_STEP, self.EPS_MIN)
             step += 1
             if self.render != -1:
                 self.env.render()
                 time.sleep(self.render)
             next_s, reward, ist, _ = self.env.step(action)
+            
+            #pickle.dump(next_s, open('input/%06d.pt' % self.FRAME, 'wb'))
+            #if self.FRAME == 1000: exit()
+
             reward = self.reward_func(self.env, next_s, reward)
             tot_reward += reward
-            self.update_q(state, action, torch.tensor(reward).float(), next_s, 1 if ist else 0)
+            loss = self.update_q(state, action, torch.tensor(reward).float(), next_s, 1 if ist else 0)
+            if loss != None:
+                self.TXSW.add_scalar('loss', loss, self.FRAME)
+            if len(self.replay_data) == self.REPLAY and self.update_count == 0:
+                img = np.zeros((1, 84, 84 // 6 * 7), dtype='float')
+                img[0,:,:84] = state[-1]
+                now_act = self.model_old(cuda(torch.tensor(state).float().unsqueeze(0))).cpu()[0]
+                now_act -= now_act.min()
+                if now_act.max() != 0:
+                    now_act /= now_act.max()
+                #print(now_act)
+                #now_act = torch.nn.Softmax(dim=0)(now_act)
+                now_act = now_act.detach().numpy()
+                #print(now_act)
+                for i in range(6):
+                    img[0,i*14:i*14+14,84:] = now_act[i]# * 256
+                #pdb.set_trace()
+                self.TXSW.add_image('model_old', img, self.FRAME)
             if ist:
-                print('Epoch %6d, %6d steps, %.2f steps/s' % (epoch, step, step / (time.time() - start_time)), tot_reward)
+                self.TXSW.add_scalar('reward', tot_reward, epoch)
+                print('Frame %9d, epoch %6d, %6d steps, %.2f steps/s, eps %.2f' % (self.FRAME, epoch, step, step / (time.time() - start_time), self.EPS), tot_reward)
                 #print(self.model_update(torch.tensor([init_state]).float())[0])
                 '''
                 for i in range(9):
@@ -274,7 +318,7 @@ class DQN:
     def main(self):
         for ep in range(self.EPOCH):
             self.sampling(ep)
-            self.EPS = max(self.EPS - self.EPS_STEP, self.EPS_MIN)
+            #self.EPS = max(self.EPS - self.EPS_STEP, self.EPS_MIN)
 '''      
 # MazeEnv
 inputlen = 9
@@ -335,6 +379,9 @@ env = SkipFrame(env)
 env = ResizeGreyPic(env)
 #env = ChangeAxis(env)
 env = CollectFrame(env)
-dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001, eps = [0.95, 0.01, 0.01],
+env = wrappers.make_env('PongNoFrameskip-v4')
+dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32)
 dqn.main()
+
+dqn.TXSW.close()
