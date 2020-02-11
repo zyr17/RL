@@ -76,7 +76,7 @@ class CollectFrame(gym.ObservationWrapper):
         if len(oldshape) == 3:
             if oldshape[0] == 1: oldshape = (oldshape[1], oldshape[2])
             elif oldshape[2] == 1: oldshape = (oldshape[0], oldshape[1])
-        print(oldshape)
+        #print(oldshape)
         self.observation_space = gym.spaces.Box(low=0, high=255, shape=(collect_number, *oldshape),
                                                 dtype=self.env.observation_space.dtype)
         #pdb.set_trace()
