@@ -35,7 +35,7 @@ def showarray(arr):
 
 #input: state; output: for every action: q values
 class DQNnet(torch.nn.Module):
-    def __init__(self, inputlen, cnn, fc):
+    def __init__(self, inputlen, cnn, fc, fc2):
         super(DQNnet, self).__init__()
         self.const = {}
         self.const['inputlen'] = inputlen
@@ -51,6 +51,8 @@ class DQNnet(torch.nn.Module):
             ))
             #self.cnn[-1].weight.data.normal_(0, 0.1)
             lastfea = i[0]
+        
+        #action
         self.fc = torch.nn.ModuleList()
         for i, j in zip(fc[:-1], fc[1:]):
             self.fc.append(torch.nn.Linear(i, j))
@@ -59,21 +61,33 @@ class DQNnet(torch.nn.Module):
             self.fc.append(torch.nn.ReLU())
         self.fc = self.fc[:-1]
 
-    def forward(self, inputs):
+        #value
+        self.vfc = torch.nn.ModuleList()
+        for i, j in zip(fc2[:-1], fc2[1:]):
+            self.vfc.append(torch.nn.Linear(i, j))
+            self.vfc[-1].weight.data.normal_(0, 0.1)
+            self.vfc.append(torch.nn.ReLU())
+        self.vfc = self.vfc[:-1]
+
+    def forward(self, inputs):          # [BATCH, DEPTH, WIDTH, LENGTH]
         #print(inputs.shape)
         x = inputs
         for cnn in self.cnn:
             x = cnn(x)
             #print(x.shape)
         x = x.reshape(x.shape[0], -1)
+        y = x                           # [BATCH, LENGTH]
         for fc in self.fc:
-            x = fc(x)
+            x = fc(x)                   # [BATCH, ACTION]
             #print(x.shape)
+        for fc in self.vfc:
+            y = fc(y)                   # [BATCH, 1]
+        xmean = torch.mean(x, 1).reshape(-1, 1).repeat(1, x.shape[1])
         #pdb.set_trace()
-        return x
+        return (x - xmean) + y.repeat(1, x.shape[1])
 
 class DQN:
-    def __init__(self, env, inputlen, cnn, fc, 
+    def __init__(self, env, inputlen, cnn, fc, fc2,
                  alpha = 0.1, gamma = 0.95, eps = 0.1, 
                  epoch = 1000, replay = 1000000, update_round = 10000,
                  learning_rate = 0.001, batch_size = 128, reward_func = None,
@@ -95,8 +109,8 @@ class DQN:
         self.FRAME = 0
         self.REPLAY = replay
         self.UPDATE = update_round
-        self.model_old = cuda(DQNnet(inputlen, cnn, fc))
-        self.model_update = cuda(DQNnet(inputlen, cnn, fc))
+        self.model_old = cuda(DQNnet(inputlen, cnn, fc, fc2))
+        self.model_update = cuda(DQNnet(inputlen, cnn, fc, fc2))
         self.model_old.load_state_dict(self.model_update.state_dict())
         self.update_count = 0
         self.replay_count = 0
@@ -289,13 +303,16 @@ cnn = [
     (64, 3, 0, 1, 1, 0),
 ]
 fc = [7 * 7 * 64, 256, 6]
+fc2 = [7 * 7 * 64, 128, 1]
 env = wrappers.make_env('PongNoFrameskip-v4')
-'''
-dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
+
+dqn = DQN(env, inputlen, cnn, fc, fc2, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, 
-          TXComment = 'DQN', target_reward = 19.5, model_save_path = 'models/DQN.pt')
+          TXComment = 'Dueling_DQN', target_reward = 19.5, model_save_path = 'models/Dueling_DQN.pt')
+
 '''
-dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
+dqn = DQN(env, inputlen, cnn, fc, fc2, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, double = True,
-          TXComment = 'Double_DQN', target_reward = 19.5, model_save_path = 'models/Double_DQN.pt')
+          TXComment = 'Double_DQN', target_reward = 19.5, model_save_path = 'models/Dueling_DDQN.pt')
+'''
 dqn.main()
