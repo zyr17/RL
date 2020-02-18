@@ -78,7 +78,7 @@ class DQN:
                  epoch = 1000, replay = 1000000, update_round = 10000,
                  learning_rate = 0.001, batch_size = 128, reward_func = None,
                  render = -1, double = False, TXComment = '', target_reward = 1e100,
-                 model_save_path = ''
+                 model_save_path = '', n_step = 1
                 ):
         self.env = env
         self.ALPHA = alpha
@@ -117,6 +117,7 @@ class DQN:
             self.reward_func = lambda env, state, reward: reward
         self.render = render
         self.DOUBLE = double
+        self.N_STEP = n_step
         self.TXSW = TXSW(comment = '_' + TXComment)
         self.TXSW.add_graph(self.model_old, (cuda(torch.tensor(np.zeros((self.BATCH_SIZE, *self.env.observation_space.shape))).float()),))
         self.MODEL_SAVE_PATH = model_save_path
@@ -153,7 +154,7 @@ class DQN:
             next_q = self.model_old(next_s).gather(1, next_a.unsqueeze(1)).squeeze(1)
         else:
             next_q = self.model_old(next_s).max(dim = 1)[0]
-        reward_b = reward + self.GAMMA * next_q * cuda(torch.tensor(1 - ist).float())
+        reward_b = reward + (self.GAMMA ** self.N_STEP) * next_q * cuda(torch.tensor(1 - ist).float())
         reward_b = reward_b.reshape(reward_b.shape[0], 1)
         #reward_b = reward_b.detach()
         L = self.loss(q.gather(1, action), reward_b)
@@ -175,8 +176,10 @@ class DQN:
     def sampling(self, epoch):
         start_time = time.time()
         state = self.env.reset()
-        init_state = state
+        #init_state = state
+        state_queue = collections.deque(maxlen = self.N_STEP + 1)
         action = self.get_action(state)
+        state_queue.append([state, action, 0])
         step = 0
         tot_reward = 0
         while True:
@@ -187,37 +190,45 @@ class DQN:
                 self.env.render()
                 time.sleep(self.render)
             next_s, reward, ist, _ = self.env.step(action)
-            
-            #pickle.dump(next_s, open('input/%06d.pt' % self.FRAME, 'wb'))
-            #if self.FRAME == 1000: exit()
-
             reward = self.reward_func(self.env, next_s, reward)
-            tot_reward += reward
-            loss = self.update_q(state, action, torch.tensor(reward).float(), next_s, 1 if ist else 0)
-            if loss != None:
-                self.TXSW.add_scalar('loss', loss, self.FRAME)
-            if len(self.replay_data) == self.REPLAY and self.update_count == 0:
-                img = np.zeros((1, 84, 84 // 6 * 7), dtype='float')
-                img[0,:,:84] = state[-1]
-                now_act = self.model_old(cuda(torch.tensor(state).float().unsqueeze(0))).cpu()[0]
-                now_act -= now_act.min()
-                if now_act.max() != 0:
-                    now_act /= now_act.max()
-                #print(now_act)
-                #now_act = torch.nn.Softmax(dim=0)(now_act)
-                now_act = now_act.detach().numpy()
-                #print(now_act)
-                for i in range(6):
-                    img[0,i*14:i*14+14,84:] = now_act[i]# * 256
-                #pdb.set_trace()
-                self.TXSW.add_image('model_old', img, self.FRAME)
+            next_action = self.get_action(next_s)
+            state_queue.append([next_s, next_action, reward])
+            if len(state_queue) == self.N_STEP + 1:
+                
+                #pickle.dump(next_s, open('input/%06d.pt' % self.FRAME, 'wb'))
+                #if self.FRAME == 1000: exit()
+
+                rewards = 0
+                for s, a, r in state_queue:
+                    rewards += r
+                tot_reward += reward
+                loss = self.update_q(state_queue[0][0], state_queue[0][1], torch.tensor(rewards).float(), state_queue[-1][0], 1 if ist else 0)
+                if loss != None:
+                    self.TXSW.add_scalar('loss', loss, self.FRAME)
+                if len(self.replay_data) == self.REPLAY and self.update_count == 0:
+                    img = np.zeros((1, 84, 84 // 6 * 7), dtype='float')
+                    img[0,:,:84] = state[-1]
+                    now_act = self.model_old(cuda(torch.tensor(state).float().unsqueeze(0))).cpu()[0]
+                    now_act -= now_act.min()
+                    if now_act.max() != 0:
+                        now_act /= now_act.max()
+                    #print(now_act)
+                    #now_act = torch.nn.Softmax(dim=0)(now_act)
+                    now_act = now_act.detach().numpy()
+                    #print(now_act)
+                    for i in range(6):
+                        img[0,i*14:i*14+14,84:] = now_act[i]# * 256
+                    #pdb.set_trace()
+                    self.TXSW.add_image('model_old', img, self.FRAME)
+            
             if ist:
                 self.PREVIOUS_REWARD.append(tot_reward)
                 self.TXSW.add_scalar('reward', tot_reward, epoch)
                 print('Frame %9d, epoch %6d, %6d steps, %.2f steps/s, eps %.2f' % (self.FRAME, epoch, step, step / (time.time() - start_time), self.EPS), tot_reward)
                 break
+
             state = next_s
-            action = self.get_action(state)
+            action = next_action
     
     def main(self):
         for ep in range(self.EPOCH):
@@ -294,8 +305,12 @@ env = wrappers.make_env('PongNoFrameskip-v4')
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, 
           TXComment = 'DQN', target_reward = 19.5, model_save_path = 'models/DQN.pt')
-'''
+
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, double = True,
           TXComment = 'Double_DQN', target_reward = 19.5, model_save_path = 'models/Double_DQN.pt')
+'''
+dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
+          epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, n_step = 5,
+          TXComment = '5_Step_DQN', target_reward = 19.5, model_save_path = 'models/5_Step_DQN.pt')
 dqn.main()
