@@ -294,7 +294,8 @@ class DQN:
                 if loss != None:
                     self.TXSW.add_scalar('loss', loss, self.FRAME)
                 if len(self.replay_data) == self.REPLAY and self.update_count == 0:
-                    img = np.zeros((1, 84, 84 // 6 * 7), dtype='float')
+                    act_size = self.env.action_space.n
+                    img = np.zeros((1, 84, 84 // act_size * (act_size + 1)), dtype='float')
                     img[0,:,:84] = state[-1]
                     now_act = self.model_old.expectation(self.model_old(cuda(torch.tensor(state).float().unsqueeze(0)))).cpu()[0]
                     now_act -= now_act.min()
@@ -304,12 +305,14 @@ class DQN:
                     #now_act = torch.nn.Softmax(dim=0)(now_act)
                     now_act = now_act.detach().numpy()
                     #print(now_act)
-                    for i in range(6):
-                        img[0,i*14:i*14+14,84:] = now_act[i]# * 256
+                    block_length = 84 // act_size
+                    for i in range(act_size):
+                        img[0,i*block_length:i*block_length+block_length,84:] = now_act[i]# * 256
                     #pdb.set_trace()
                     self.TXSW.add_image('model_old', img, self.FRAME)
             
             if ist:
+                #print('lives', self.env.unwrapped.ale.lives())
                 self.PREVIOUS_REWARD.append(tot_reward)
                 self.TXSW.add_scalar('reward', tot_reward, epoch)
                 print('Frame %9d, epoch %6d, %6d steps, %.2f steps/s, eps %.2f' % (self.FRAME, epoch, step, step / (time.time() - start_time), self.EPS), tot_reward)
@@ -379,7 +382,7 @@ env = env.unwrapped
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
           epoch = 100000, replay = 10000, update_round = 1000, render = 0)
 '''
-
+'''
 #Pong CNN
 inputlen = 4
 cnn = [
@@ -389,12 +392,12 @@ cnn = [
 ]
 n_atoms = 51
 fc = [7 * 7 * 64, 1000, 6 * n_atoms]
-env = wrappers.make_env('PongNoFrameskip-v4')
+env = wrappers.make_env('Pong-v0')
 
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, n_atoms = n_atoms, value_min = -21, value_max = 21,
-          TXComment = '', target_reward = 19.5, model_save_path = '')
-'''
+          TXComment = 'Distribution', target_reward = 15, model_save_path = '')
+
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, double = True,
           TXComment = 'Double_DQN', target_reward = 19.5, model_save_path = 'models/Double_DQN.pt')
@@ -403,4 +406,20 @@ dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, n_step = 5,
           TXComment = '5_Step_DQN', target_reward = 19.5, model_save_path = 'models/5_Step_DQN.pt')
 '''
+
+
+#Breakout CNN
+inputlen = 4
+cnn = [
+    (32, 8, 0, 4, 1, 0),
+    (64, 4, 0, 2, 1, 0),
+    (64, 3, 0, 1, 1, 0),
+]
+n_atoms = 51
+fc = [7 * 7 * 64, 1000, 4 * n_atoms]
+env = wrappers.make_env('BreakoutNoFrameskip-v4')
+dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.00025, eps = [1, 0.000001, 0.1],
+          epoch = 100000, replay = 100000, update_round = 1000, render = -1, batch_size = 32, n_atoms = n_atoms, value_min = 0, value_max = 500,
+          TXComment = 'B_Distribution', target_reward = 15, model_save_path = 'models/B_Distribution.pt')
+
 dqn.main()

@@ -14,6 +14,35 @@ class ScaledFloatFrame(gym.ObservationWrapper):
         return res
 
 
+class MultiLives(gym.ObservationWrapper):
+    def __init__(self, env):
+        super(MultiLives, self).__init__(env)
+        self.env = env
+        self.lives = 0
+        self.real_over = True
+    def reset(self):
+        if (self.real_over):
+            state = self.env.reset()
+            self.real_over = False
+        else:
+            state, _, _, _ = self.env.step(0)
+        self.lives = self.env.unwrapped.ale.lives()
+        return state
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        self.real_over = done
+        # check current lives, make loss of life terminal,
+        # then update lives to handle bonus lives
+        lives = self.env.unwrapped.ale.lives()
+        
+        if lives < self.lives and lives > 0:
+            # for Qbert sometimes we stay in lives == 0 condition for a few frames
+            # so it's important to keep lives > 0, so that we only reset once
+            # the environment advertises done.
+            done = True
+        self.lives = lives
+        return obs, reward, done, info
+
 class SkipFrame(gym.ObservationWrapper):
     def __init__(self, env, skip_number = 4):
         super(SkipFrame, self).__init__(env)
@@ -46,7 +75,8 @@ class ResizeGreyPic(gym.ObservationWrapper):
         new_s_all = []
         for s in state:
             new_s = s[:,:,0] * 0.299 + s[:,:,1] * 0.587 + s[:,:,2] * 0.114
-            new_s = new_s[34:194, :]
+            new_s = new_s[34:194, :]#Pong
+            #new_s = new_s[32:192, :]#Breakout
             new_s_all.append(new_s)
         #pdb.set_trace()
         new_s_all = np.stack(new_s_all).max(0)
@@ -105,6 +135,7 @@ def make_env(env_name):
     return env
     '''
     env = gym.make(env_name)
+    env = MultiLives(env)
     env = SkipFrame(env)
     env = ResizeGreyPic(env)
     env = CollectFrame(env)

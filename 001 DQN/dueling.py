@@ -307,8 +307,8 @@ fc2 = [7 * 7 * 64, 128, 1]
 env = wrappers.make_env('PongNoFrameskip-v4')
 
 dqn = DQN(env, inputlen, cnn, fc, fc2, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
-          epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, 
-          TXComment = 'Dueling_DQN', target_reward = 19.5, model_save_path = 'models/Dueling_DQN.pt')
+          epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, double = True, 
+          TXComment = 'DDueling_DQN', target_reward = 15, model_save_path = 'models/DDueling_DQN.pt')
 
 '''
 dqn = DQN(env, inputlen, cnn, fc, fc2, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
