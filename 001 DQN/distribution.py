@@ -21,6 +21,8 @@ class Fake_TXSW:
         pass
     def add_graph(self, *x):
         pass
+    def close(self):
+        pass
 
 import wrappers
 
@@ -172,7 +174,7 @@ class DQN:
 
     def dist_proj(self, next_dist, reward, ist):
         #pdb.set_trace()
-        res_dist = torch.zeros(next_dist.shape).float()
+        res_dist = np.zeros(next_dist.shape, dtype='float')
         #res_dist = cuda(res_dist)
         delta = (self.VALMAX - self.VALMIN) / (self.N_ATOMS - 1)
         for atom in range(self.N_ATOMS):
@@ -180,8 +182,8 @@ class DQN:
             r[r > self.VALMAX] = self.VALMAX
             r[r < self.VALMIN] = self.VALMIN
             idx = (r - self.VALMIN) / delta
-            low = torch.floor(idx).long()
-            high = torch.ceil(idx).long()
+            low = np.floor(idx).astype(int)
+            high = np.ceil(idx).astype(int)
             eq_msk = low == high
             ne_msk = low != high
             res_dist[eq_msk, low[eq_msk]] += next_dist[eq_msk, atom]
@@ -191,14 +193,14 @@ class DQN:
         #pdb.set_trace()
         if ist.sum() > 0:
             #pdb.set_trace()
-            ist_msk = torch.tensor(ist).bool()
+            ist_msk = np.array(ist, dtype='bool')
             res_dist[ist_msk] = 0.0
             r = reward
             r[r > self.VALMAX] = self.VALMAX
             r[r < self.VALMIN] = self.VALMIN
             idx = (r - self.VALMIN) / delta
-            low = torch.floor(idx).long()
-            high = torch.ceil(idx).long()
+            low = np.floor(idx).astype(int)
+            high = np.ceil(idx).astype(int)
             #ist_msk = cuda(ist_msk)
             eq_msk = (low == high) * ist_msk
             ne_msk = (low != high) * ist_msk
@@ -220,17 +222,18 @@ class DQN:
         self.opt.zero_grad()
         state = cuda(torch.tensor(state).float())
         action = cuda(torch.tensor(action).long())
-        reward_cpu = torch.tensor(reward).float()
-        reward = cuda(reward_cpu)
+        #reward_cpu = torch.tensor(reward).float()
+        #reward = cuda(reward_cpu)
         next_s = cuda(torch.tensor(next_s).float())
         dist = self.model_update(state)
         q = self.model_update.expectation(dist)
         #print(q)
         action = action.reshape(action.shape[0], 1, 1).repeat(1, 1, self.N_ATOMS)
         if self.DOUBLE:
+            next_dists = self.model_old(next_s)
             next_a = self.model_update.expectation(self.model_update(next_s)).max(dim = 1)[1]
-            next_dist = self.model_old.apply_softmax(self.model_old(next_s)).gather(1, next_a.unsqueeze(1).unsqueeze(2).repeat(1, 1, self.N_ATOMS)).squeeze(1)
-            next_q = self.model_old.expectation(next_dist)
+            next_dist = self.model_old.apply_softmax(next_dists).gather(1, next_a.unsqueeze(1).unsqueeze(2).repeat(1, 1, self.N_ATOMS)).squeeze(1)
+            next_q = self.model_old.expectation(next_dists)
         else:
             next_dists = self.model_old(next_s)
             next_q, idx = self.model_old.expectation(next_dists).max(dim = 1)
@@ -238,7 +241,7 @@ class DQN:
         #next_dist: [BATCH, N_ATOMS]
         #pdb.set_trace()
         
-        new_dist = cuda(self.dist_proj(next_dist.cpu(), reward_cpu, ist))
+        new_dist = cuda(torch.tensor(self.dist_proj(next_dist.cpu().detach().numpy(), reward, ist)))
         #pdb.set_trace()
         L = (-new_dist * torch.nn.functional.log_softmax(dist.gather(1, action).squeeze(1), dim = 1)).sum(dim = 1).mean()
         
@@ -382,7 +385,7 @@ env = env.unwrapped
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
           epoch = 100000, replay = 10000, update_round = 1000, render = 0)
 '''
-'''
+
 #Pong CNN
 inputlen = 4
 cnn = [
@@ -392,12 +395,12 @@ cnn = [
 ]
 n_atoms = 51
 fc = [7 * 7 * 64, 1000, 6 * n_atoms]
-env = wrappers.make_env('Pong-v0')
+env = wrappers.make_env('PongNoFrameskip-v4')
 
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
-          epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, n_atoms = n_atoms, value_min = -21, value_max = 21,
-          TXComment = 'Distribution', target_reward = 15, model_save_path = '')
-
+          epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, n_atoms = n_atoms, value_min = -21, value_max = 21, double = True,
+          TXComment = '', target_reward = 15, model_save_path = '')
+"""
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, double = True,
           TXComment = 'Double_DQN', target_reward = 19.5, model_save_path = 'models/Double_DQN.pt')
@@ -405,9 +408,9 @@ dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, n_step = 5,
           TXComment = '5_Step_DQN', target_reward = 19.5, model_save_path = 'models/5_Step_DQN.pt')
+"""
+
 '''
-
-
 #Breakout CNN
 inputlen = 4
 cnn = [
@@ -419,7 +422,7 @@ n_atoms = 51
 fc = [7 * 7 * 64, 1000, 4 * n_atoms]
 env = wrappers.make_env('BreakoutNoFrameskip-v4')
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.00025, eps = [1, 0.000001, 0.1],
-          epoch = 100000, replay = 100000, update_round = 1000, render = -1, batch_size = 32, n_atoms = n_atoms, value_min = 0, value_max = 500,
+          epoch = 100000, replay = 100000, update_round = 1000, render = -1, batch_size = 32, n_atoms = n_atoms, value_min = 0, value_max = 100, double = True,
           TXComment = 'B_Distribution', target_reward = 15, model_save_path = 'models/B_Distribution.pt')
-
+'''
 dqn.main()
