@@ -63,10 +63,12 @@ class SkipFrame(gym.ObservationWrapper):
         return np.max(np.stack(states), axis = 0), total_reward, terminal, _
 
 class ResizeGreyPic(gym.ObservationWrapper):
-    def __init__(self, env, size = (84, 84)):
+    def __init__(self, env, cut = [-1, -1], size = (84, 84)):
         super(ResizeGreyPic, self).__init__(env)
         self.SIZE = size
         self.observation_space = gym.spaces.Box(low = 0, high = 255, shape = (size[1], size[0], 1), dtype=np.float)
+        self.cut = cut
+
     def observation(self, state):
         #print(state.shape)
         #pdb.set_trace()
@@ -75,8 +77,10 @@ class ResizeGreyPic(gym.ObservationWrapper):
         new_s_all = []
         for s in state:
             new_s = s[:,:,0] * 0.299 + s[:,:,1] * 0.587 + s[:,:,2] * 0.114
-            new_s = new_s[34:194, :]#Pong
-            #new_s = new_s[32:192, :]#Breakout
+            if self.cut[0] != -1 or self.cut[1] != -1:
+                new_s = new_s[self.cut[0]:self.cut[1], :]
+                #new_s = new_s[34:194, :]#Pong
+                #new_s = new_s[32:192, :]#Breakout
             new_s_all.append(new_s)
         #pdb.set_trace()
         new_s_all = np.stack(new_s_all).max(0)
@@ -134,10 +138,15 @@ def make_env(env_name):
     env = CollectFrame(env)
     return env
     '''
+    cut = [-1, -1]
+    if env_name[:4] == 'Pong':
+        cut = [34, 194]
+    elif env_name[:8] == 'Breakout':
+        cut = [32, 192]
     env = gym.make(env_name)
     env = MultiLives(env)
     env = SkipFrame(env)
-    env = ResizeGreyPic(env)
+    env = ResizeGreyPic(env, cut)
     env = CollectFrame(env)
     env = ScaledFloatFrame(env)
     return env
