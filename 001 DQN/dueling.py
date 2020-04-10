@@ -304,8 +304,10 @@ cnn = [
 ]
 fc = [7 * 7 * 64, 256, 6]
 fc2 = [7 * 7 * 64, 128, 1]
-env = wrappers.make_env('PongNoFrameskip-v4')
-
+from baselines.common.atari_wrappers import *
+#env = wrappers.make_env('PongNoFrameskip-v4')
+env = wrappers.ChangeAxis(wrap_deepmind(make_atari('PongNoFrameskip-v4')))
+inputlen = 1
 dqn = DQN(env, inputlen, cnn, fc, fc2, gamma = 0.99, learning_rate = 0.0001, eps = [1, 0.00001, 0.02],
           epoch = 100000, replay = 10000, update_round = 1000, render = -1, batch_size = 32, double = True, 
           TXComment = 'DDueling_DQN', target_reward = 15, model_save_path = 'models/DDueling_DQN.pt')

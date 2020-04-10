@@ -14,7 +14,16 @@ TXSW = tensorboardX.SummaryWriter
 
 import wrappers
 
+try:
+    @profile
+    def emptyfunc():
+        pass
+except:
+    def profile(func):
+        return func
+
 ENABLE_CUDA = True
+#torch.backends.cudnn.benchmark = True
 
 def cuda(tensor):
     """
@@ -45,10 +54,10 @@ def showarray(arr):
     plt.imshow(arr)
     plt.show()
 
-#input: state; output: for every action: q values
-class PGNet(torch.nn.Module):
-    def __init__(self, inputlen, cnn, fc):
-        super(PGNet, self).__init__()
+#input: state; output: policy distribution, value function
+class A2CNet(torch.nn.Module):
+    def __init__(self, inputlen, cnn, fc, action_space):
+        super(A2CNet, self).__init__()
         self.const = {}
         self.const['inputlen'] = inputlen
         self.const['cnn'] = cnn
@@ -69,8 +78,10 @@ class PGNet(torch.nn.Module):
             self.fc[-1].weight.data.normal_(0, 0.1)
             #torch.nn.Dropout(0.5),
             self.fc.append(torch.nn.ReLU())
-        self.fc = self.fc[:-1]
+        #self.fc = self.fc[:-1]
+        self.p_fc = torch.nn.Linear(fc[-1], action_space)
         self.softmax = torch.nn.Softmax(dim = 1)
+        self.v_fc = torch.nn.Linear(fc[-1], 1)
 
     def forward(self, inputs, apply_softmax = False):
         #print(inputs.shape)
@@ -83,9 +94,11 @@ class PGNet(torch.nn.Module):
             x = fc(x)
             #print(x.shape)
         #pdb.set_trace()
+        v = self.v_fc(x)
+        pg = self.p_fc(x)
         if apply_softmax:
-            x = self.softmax(x)
-        return x
+            pg = self.softmax(pg)
+        return pg, v
 
 class ReplayBuffer:
     def __init__(self, maxlen):
@@ -107,11 +120,11 @@ class ReplayBuffer:
         choice = np.random.choice(self.maxlen, batch_size, replace = False)
         return [self.buffer[x] for x in choice]
 
-class PG:
+class A2C:
     def __init__(self, env, inputlen, cnn, fc, 
                  gamma = 0.95, epoch = 1000,
                  learning_rate = 0.001, batch_size = 128, reward_func = None,
-                 max_step = 20, enable_advantage = True, baseline_length = 100, 
+                 max_step = 20, entropy_beta = 0.01, clip_grad = 0.1,
                  render = -1, TXComment = '', target_reward = 1e100,
                  model_save_path = ''
                 ):
@@ -119,7 +132,7 @@ class PG:
         self.GAMMA = gamma
         self.EPOCH = epoch
         self.FRAME = 0
-        self.model = cuda(PGNet(inputlen, cnn, fc))
+        self.model = cuda(A2CNet(inputlen, cnn, fc, env.action_space.n))
         self.update_count = 0
         self.LR = learning_rate
         self.BATCH_SIZE = batch_size
@@ -130,9 +143,9 @@ class PG:
         if type(reward_func) == type(None):
             self.reward_func = lambda env, state, reward: reward
         self.MAX_STEP = max_step
-        self.ADVANTAGE = enable_advantage
+        self.ENTROPY_BETA = entropy_beta
+        self.CLIP_GRAD = clip_grad
         self.SAMPLE_REWARD = []
-        self.BASELINE_LENGTH = baseline_length
 
         self.render = render
         if TXComment == '':
@@ -145,37 +158,68 @@ class PG:
         self.PREVIOUS_REWARD = []
         self.BEST_RESULT = -1e100
 
+    @profile
     def get_action(self, state):
-        policy = self.model(cuda(torch.tensor([state]).float()), apply_softmax = True)[0].detach().cpu().numpy()
+        #pdb.set_trace()
+        state = np.expand_dims(state, 0)
+        state = torch.tensor(state)
+        state = state.float()
+        state = cuda(state)
+        #state = cuda(torch.tensor([state]).float())
+        with torch.no_grad():
+            policy = self.model(state, apply_softmax = True)[0][0]
+        policy = policy.detach().cpu().numpy()
         return np.random.choice(len(policy), p = policy)
 
-    def real_update_policy(self, state, action, reward, baseline):
-        #TODO: cross entropy loss to search other actions; off-policy mode?
+    def real_update_policy(self, state, action, reward, next_state, ist):
+        #pdb.set_trace()
+        #print('reward sum', sum(reward))
         self.opt.zero_grad()
         state = cuda(state)
         action = cuda(action)
         reward = cuda(reward)
-        if self.ADVANTAGE:
-            reward -= baseline
-        dist = self.model(state)
-        log_s_dist = torch.nn.functional.log_softmax(dist)
+        next_state = cuda(next_state)
+        dist, v = self.model(state)
+        _, next_v = self.model(next_state)
+        next_v.detach_()
+        next_v[ist] = 0
+        next_v *= self.GAMMA ** self.MAX_STEP
+        next_v.squeeze_()
+        v.squeeze_()
+        #print(next_v.shape, reward.shape)
+        next_v += reward
+        log_s_dist = torch.nn.functional.log_softmax(dist, dim = 1)
+        s_dist = torch.nn.functional.softmax(dist, dim = 1)
         #pdb.set_trace()
-        loss = -(reward * torch.gather(log_s_dist, 1, action.unsqueeze(1)).squeeze(1)).mean()
+        pd_loss = -((next_v - v.detach()) * torch.gather(log_s_dist, 1, action.unsqueeze(1)).squeeze(1)).mean()
+        entropy_loss = (s_dist * log_s_dist).sum(dim=1).mean()
+        #print(next_v + reward.unsqueeze(1), v)
+        #pdb.set_trace()
+        v_loss = torch.nn.functional.mse_loss(next_v, v)
+
+        if not hasattr(self, 'LAST_OUTPUT') or self.FRAME - 10000 > self.LAST_OUTPUT:
+            print(pd_loss.item(), self.ENTROPY_BETA * entropy_loss.item(), v_loss.item(), v.mean().item())
+            self.LAST_OUTPUT = self.FRAME
+        loss = pd_loss + self.ENTROPY_BETA * entropy_loss + v_loss
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.CLIP_GRAD)
         self.opt.step()
         return loss.item()
 
-    def update_policy(self, state, action, reward, baseline):
-        self.buffer.append([state, action, reward])
+    def update_policy(self, state, action, reward, next_state, ist):
+        self.buffer.append([state, action, reward, next_state, ist])
         if len(self.buffer) == self.BATCH_SIZE:
-            state_b, action_b, reward_b = zip(*self.buffer)
+            state_b, action_b, reward_b, next_state_b, ist_b = zip(*self.buffer)
             state_b = torch.tensor(np.stack(state_b)).float()
             action_b = torch.tensor(np.stack(action_b))
             reward_b = torch.tensor(np.stack(reward_b))
+            next_state_b = torch.tensor(np.stack(next_state_b)).float()
+            ist_b = torch.tensor(np.stack(ist_b))
             self.buffer.clear()
-            return self.real_update_policy(state_b, action_b, reward_b, baseline)
+            return self.real_update_policy(state_b, action_b, reward_b, next_state_b, ist_b)
         return None
     
+    @profile
     def sampling(self, epoch):
         start_time = time.time()
         state = self.env.reset()
@@ -185,8 +229,8 @@ class PG:
         #queue_reward = 0
         step = 0
         tot_reward = 0
-        baseline = np.array(self.SAMPLE_REWARD[-self.BASELINE_LENGTH:]).mean() if len(self.SAMPLE_REWARD) > 0 else 0
         terminated = False
+        last_loss = 0
         while True:
             self.FRAME += 1
             step += 1
@@ -202,32 +246,22 @@ class PG:
                 tot_reward += reward
                 state_queue.append([state, action, reward])
 
-
             if len(state_queue) == self.MAX_STEP or terminated:
                 rewards = 0
                 for _, _, r in reversed(state_queue):
                     rewards = r + self.GAMMA * rewards
                 self.SAMPLE_REWARD.append(rewards)
-                loss = self.update_policy(state_queue[0][0], state_queue[0][1], torch.tensor(rewards).float(), baseline)
+                loss = self.update_policy(state_queue[0][0], state_queue[0][1], torch.tensor(rewards).float(), next_s, terminated)
                 if loss != None:
                     self.TXSW.add_scalar('loss', loss, self.FRAME - self.MAX_STEP)
+                    last_loss = loss
                 if terminated:
                     state_queue.popleft()
             
             if terminated and len(state_queue) == 0:
-            #if ist:
-                '''
-                rewards = 0
-                for _, _, r in reversed(state_queue):
-                    rewards = r + self.GAMMA * rewards
-                for i in range(1, len(state_queue)):
-                    loss = self.update_policy(state_queue[i][0], state_queue[i][1], torch.tensor(rewards).float(), baseline)
-                    if loss != None:
-                        self.TXSW.add_scalar('loss', loss, self.FRAME - self.MAX_STEP + i)
-                '''
                 self.PREVIOUS_REWARD.append(tot_reward)
                 self.TXSW.add_scalar('reward', tot_reward, epoch)
-                print('Frame %7d, epoch %6d, %5d steps, %.1f steps/s, %4.2f, %4.2f' % (self.FRAME, epoch, step, step / (time.time() - start_time), tot_reward, baseline))
+                print('Frame %7d, epoch %6d, %5d steps, %.1f steps/s, loss %4.4f, %4.2f' % (self.FRAME, epoch, step, step / (time.time() - start_time), last_loss, tot_reward))
                 break
 
             state = next_s
@@ -256,11 +290,11 @@ env = mazeenv.MazeEnv()
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.01,
           epoch = 100000, replay = 2000, update_round = 100)
 '''
-
+'''
 # CartPole
 inputlen = 4
 cnn = []
-fc = [4, 100, 10, 2]
+fc = [4, 100, 10]
 env = gym.make("CartPole-v0")
 env = env.unwrapped
 def CartPole_reward_func(env, state, reward):
@@ -271,10 +305,10 @@ def CartPole_reward_func(env, state, reward):
     r2 = (env.theta_threshold_radians - abs(theta)) / env.theta_threshold_radians - 0.5
     reward = float(r1 + r2)
     return reward
-pg = PG(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.001, epoch = 100000, 
-         batch_size = 16, max_step = 10, render = -1, target_reward = 200, baseline_length = 100, 
-         reward_func=CartPole_reward_func, TXComment='PG_Cartpole')
-
+a2c = A2C(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.001, epoch = 100000, 
+         batch_size = 16, max_step = 10, render = -1, target_reward = 200,
+         reward_func=CartPole_reward_func, TXComment='A2C_Cartpole')
+'''
 '''
 #MsPacman RAM
 inputlen = 128
@@ -295,7 +329,7 @@ env = env.unwrapped
 dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
           epoch = 100000, replay = 10000, update_round = 1000, render = 0)
 '''
-'''
+
 #Pong CNN
 inputlen = 4
 cnn = [
@@ -303,10 +337,12 @@ cnn = [
     (64, 4, 0, 2, 1, 0),
     (64, 3, 0, 1, 1, 0),
 ]
-fc = [7 * 7 * 64, 256, 6]
+fc = [7 * 7 * 64, 256]
+#from baselines.common.atari_wrappers import *
 env = wrappers.make_env('PongNoFrameskip-v4')
-pg = PG(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, epoch = 100000, 
-         batch_size = 32, max_step = 40, render = -1, target_reward = 18, baseline_length = 1000, 
-         TXComment='PG_Pong')
-'''
-pg.main()
+#env = wrap_deepmind(make_atari('PongNoFrameskip-v4'))
+a2c = A2C(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, epoch = 100000, 
+         batch_size = 64, max_step = 40, render = -1, target_reward = 18,
+         TXComment='A2C_Pong')
+
+a2c.main()

@@ -97,7 +97,7 @@ class ChangeAxis(gym.ObservationWrapper):
     def __init__(self, env):
         super(ChangeAxis, self).__init__(env)
         size = self.env.observation_space.shape
-        self.observation_space = gym.spaces.Box(low = self.env.observation_space.low.reshape(-1)[0], high = self.env.observation_space.high.reshape(-1)[0], shape = (size[2], size[0], size[1]), dtype=self.env.observation_space.dtype)
+        self.observation_space = gym.spaces.Box(low = self.env.observation_space.low, high = self.env.observation_space.high, shape = (size[2], size[0], size[1]), dtype=self.env.observation_space.dtype)
     def observation(self, state):
         return state.transpose(2, 0, 1)
 
