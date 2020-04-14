@@ -12,7 +12,7 @@ import pdb
 import tensorboardX
 TXSW = tensorboardX.SummaryWriter
 
-import wrappers
+import ../wrappers
 
 ENABLE_CUDA = True
 
