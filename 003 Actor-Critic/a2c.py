@@ -12,7 +12,13 @@ import pdb
 import tensorboardX
 TXSW = tensorboardX.SummaryWriter
 
-import wrappers
+import sys
+sys.path.append("..")
+
+from common.wrappers import ChangeAxis
+from common.models import AtariCNN
+
+from baselines.common.atari_wrappers import wrap_deepmind, make_atari
 
 try:
     @profile
@@ -56,44 +62,16 @@ def showarray(arr):
 
 #input: state; output: policy distribution, value function
 class A2CNet(torch.nn.Module):
-    def __init__(self, inputlen, cnn, fc, action_space):
+    def __init__(self, inputlen, featurelen, action_space, feature_net):
         super(A2CNet, self).__init__()
-        self.const = {}
-        self.const['inputlen'] = inputlen
-        self.const['cnn'] = cnn
-        self.const['fc'] = fc
-        self.cnn = torch.nn.ModuleList()
-        lastfea = inputlen
-        for i in cnn:
-            self.cnn.append(torch.nn.Sequential(
-                torch.nn.Conv2d(lastfea, i[0], i[1], padding=i[2], stride = i[3]),
-                torch.nn.ReLU(),
-                torch.nn.MaxPool2d(i[4], padding=i[5])
-            ))
-            #self.cnn[-1].weight.data.normal_(0, 0.1)
-            lastfea = i[0]
-        self.fc = torch.nn.ModuleList()
-        for i, j in zip(fc[:-1], fc[1:]):
-            self.fc.append(torch.nn.Linear(i, j))
-            self.fc[-1].weight.data.normal_(0, 0.1)
-            #torch.nn.Dropout(0.5),
-            self.fc.append(torch.nn.ReLU())
-        #self.fc = self.fc[:-1]
-        self.p_fc = torch.nn.Linear(fc[-1], action_space)
+        self.feature_net = feature_net(inputlen, featurelen)
+        self.p_fc = torch.nn.Linear(featurelen, action_space)
         self.softmax = torch.nn.Softmax(dim = 1)
-        self.v_fc = torch.nn.Linear(fc[-1], 1)
+        self.v_fc = torch.nn.Linear(featurelen, 1)
 
     def forward(self, inputs, apply_softmax = False):
-        #print(inputs.shape)
         x = inputs
-        for cnn in self.cnn:
-            x = cnn(x)
-            #print(x.shape)
-        x = x.reshape(x.shape[0], -1)
-        for fc in self.fc:
-            x = fc(x)
-            #print(x.shape)
-        #pdb.set_trace()
+        x = self.feature_net(x)
         v = self.v_fc(x)
         pg = self.p_fc(x)
         if apply_softmax:
@@ -132,7 +110,7 @@ class A2C:
         self.GAMMA = gamma
         self.EPOCH = epoch
         self.FRAME = 0
-        self.model = cuda(A2CNet(inputlen, cnn, fc, env.action_space.n))
+        self.model = cuda(A2CNet(inputlen, 512, env.action_space.n, AtariCNN))
         self.update_count = 0
         self.LR = learning_rate
         self.BATCH_SIZE = batch_size
@@ -331,16 +309,14 @@ dqn = DQN(env, inputlen, cnn, fc, gamma = 0.9, learning_rate = 0.0001,
 '''
 
 #Pong CNN
-inputlen = 4
+inputlen = 1
 cnn = [
     (32, 8, 0, 4, 1, 0),
     (64, 4, 0, 2, 1, 0),
     (64, 3, 0, 1, 1, 0),
 ]
 fc = [7 * 7 * 64, 256]
-#from baselines.common.atari_wrappers import *
-env = wrappers.make_env('PongNoFrameskip-v4')
-#env = wrap_deepmind(make_atari('PongNoFrameskip-v4'))
+env = ChangeAxis(wrap_deepmind(make_atari('PongNoFrameskip-v4')))
 a2c = A2C(env, inputlen, cnn, fc, gamma = 0.99, learning_rate = 0.0001, epoch = 100000, 
          batch_size = 64, max_step = 40, render = -1, target_reward = 18,
          TXComment='A2C_Pong')
