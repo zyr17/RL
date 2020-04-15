@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data.sampler import BatchSampler, SubsetRandomSampler
+import pdb
 
 
 def _flatten_helper(T, N, _tensor):
@@ -43,25 +44,58 @@ class RolloutStorage(object):
         self.masks = self.masks.to(device)
         self.bad_masks = self.bad_masks.to(device)
 
+    def cuda(self):
+        self.obs = self.obs.cuda()
+        self.recurrent_hidden_states = self.recurrent_hidden_states.cuda()
+        self.rewards = self.rewards.cuda()
+        self.value_preds = self.value_preds.cuda()
+        self.returns = self.returns.cuda()
+        self.action_log_probs = self.action_log_probs.cuda()
+        self.actions = self.actions.cuda()
+        self.masks = self.masks.cuda()
+        self.bad_masks = self.bad_masks.cuda()
+        return self
+    
     def insert(self, obs, recurrent_hidden_states, actions, action_log_probs,
                value_preds, rewards, masks, bad_masks):
-        self.obs[self.step + 1].copy_(obs)
+        self.obs[self.step + 1].copy_(torch.tensor(obs))
         self.recurrent_hidden_states[self.step +
-                                     1].copy_(recurrent_hidden_states)
-        self.actions[self.step].copy_(actions)
-        self.action_log_probs[self.step].copy_(action_log_probs)
-        self.value_preds[self.step].copy_(value_preds)
-        self.rewards[self.step].copy_(rewards)
-        self.masks[self.step + 1].copy_(masks)
-        self.bad_masks[self.step + 1].copy_(bad_masks)
+                                     1].copy_(torch.tensor(recurrent_hidden_states))
+        self.actions[self.step].copy_(torch.tensor(actions))
+        self.action_log_probs[self.step].copy_(torch.tensor(action_log_probs))
+        self.value_preds[self.step].copy_(torch.tensor(value_preds))
+        self.rewards[self.step].copy_(torch.tensor(rewards))
+        self.masks[self.step + 1].copy_(torch.tensor(masks))
+        self.bad_masks[self.step + 1].copy_(torch.tensor(bad_masks))
 
-        self.step = (self.step + 1) % self.num_steps
+        self.step = (self.step + 1)# % self.num_steps
+        #pdb.set_trace()
+
+    def get_one_flatten(self, arr, length = None):
+        if length == None:
+            length = self.step
+        return arr[:length].reshape(-1, *arr.shape[2:])
+
+    def get_flatten(self):
+        obs = self.get_one_flatten(self.obs)
+        next_obs = self.get_one_flatten(self.obs[1:])
+        recurrent_hidden_states = self.get_one_flatten(self.recurrent_hidden_states)
+        actions = self.get_one_flatten(self.actions)
+        action_log_probs = self.get_one_flatten(self.action_log_probs)
+        value_preds = self.get_one_flatten(self.value_preds)
+        rewards = self.get_one_flatten(self.rewards)
+        masks = self.get_one_flatten(self.masks)
+        bad_masks = self.get_one_flatten(self.bad_masks)
+        returns = self.get_one_flatten(self.returns)
+        return obs, recurrent_hidden_states, actions, action_log_probs, \
+               value_preds, rewards, masks, bad_masks, next_obs, returns
 
     def after_update(self):
         self.obs[0].copy_(self.obs[-1])
         self.recurrent_hidden_states[0].copy_(self.recurrent_hidden_states[-1])
         self.masks[0].copy_(self.masks[-1])
         self.bad_masks[0].copy_(self.bad_masks[-1])
+        self.step = 0
 
     def compute_returns(self,
                         next_value,
@@ -89,8 +123,8 @@ class RolloutStorage(object):
                         + (1 - self.bad_masks[step + 1]) * self.value_preds[step]
         else:
             if use_gae:
-                self.value_preds[-1] = next_value
                 gae = 0
+                self.returns[-1] = next_value
                 for step in reversed(range(self.rewards.size(0))):
                     delta = self.rewards[step] + gamma * self.value_preds[
                         step + 1] * self.masks[step +
@@ -99,8 +133,8 @@ class RolloutStorage(object):
                                                                   1] * gae
                     self.returns[step] = gae + self.value_preds[step]
             else:
-                self.returns[-1] = next_value
-                for step in reversed(range(self.rewards.size(0))):
+                self.value_preds[self.step] = next_value
+                for step in reversed(range(self.step)):
                     self.returns[step] = self.returns[step + 1] * \
                         gamma * self.masks[step + 1] + self.rewards[step]
 
