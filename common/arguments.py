@@ -2,6 +2,7 @@ import argparse
 import multiprocessing
 import yaml
 import sys
+import time
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -9,22 +10,25 @@ def parse_args():
     # common args
     parser.add_argument('-a', '--algo', type=str, default='a2c')
     parser.add_argument('--env', type=str, default='PongNoFrameskip-v4')
-    parser.add_argument('--n-envs', type=int, default=1)
+    #deprecated# parser.add_argument('--n-envs', type=int, default=1)
     parser.add_argument('-lr', '--learning-rate', type=float, default=1e-4)
     parser.add_argument('-n', '--n-frames', type=int, default=1000000)
-    parser.add_argument('-b', '--batch-size', type=int, default=128)
+    #deprecated# parser.add_argument('-b', '--batch-size', type=int, default=128)
     parser.add_argument('-t', '--target-reward', type=float, default=1e100)
     parser.add_argument('-tx', '--tensorboardx-comment', type=str, default='')
-    parser.add_argument('-s', '--save-path', type=str, default='model.pt')
-    parser.add_argument('-si', '--save-interval', type=int, default=1000)
+    parser.add_argument('-s', '--model-save-path', type=str, default='model.pt')
+    #parser.add_argument('-si', '--save-interval', type=int, default=1000)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--threads', type=int, default=-1)
     parser.add_argument('-r', '--render-steps', type=int, default=-1)
     parser.add_argument('--seed', type=int, default=-1)
     parser.add_argument('-li', '--log-interval', type=int, default=100)
-    parser.add_argument('--no-cuda', action='store_true', default=False)
+    #parser.add_argument('--no-cuda', action='store_true', default=False)
     parser.add_argument('-c', '--config', type=str, default='')
-
+    parser.add_argument('--n-steps', type=int, default=5)
+    parser.add_argument('--evaluate-length', type=int, default=10)
+    parser.add_argument('--feature-hidden-size', type=int, default=512)
+    
     # DQN args
     parser.add_argument('-Dr', '--dqn-replay-size', type=int, default=10000)
     parser.add_argument('-Da', '--dqn-alpha', type=float, default=0.1)
@@ -41,8 +45,8 @@ def parse_args():
     # TODO: prioritized DQN and distributional dqn has other params
 
     # A2C args
-    parser.add_argument('-An', '--a2c-n-steps', type=int, default=5)
     parser.add_argument('-Ae', '--a2c-entropy-beta', type=float, default=0.01)
+    parser.add_argument('-Av', '--a2c-value-beta', type=float, default=1)
     parser.add_argument('-Ac', '--a2c-clip-grad', type=float, default=0.1)
 
     args = parser.parse_args()
@@ -64,6 +68,10 @@ def parse_args():
         if cpu_count < 1:
             cpu_count = 1
         args.threads = cpu_count
+        print('threads unset, auto use %d threads'% args.threads)
+
+    if args.seed == -1:
+        args.seed = int(time.time() * 1000000000)
 
     return args
 
