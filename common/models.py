@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from common.distributions import FixedCategorical
 
 class AtariCNN(nn.Module):
     def __init__(self, inputlen, recurrent=False, hidden_size=512):
@@ -36,3 +37,11 @@ class ActorCriticNet(torch.nn.Module):
         if apply_softmax:
             pg = self.softmax(pg)
         return pg, v
+
+    def get_action(self, state):
+        #pdb.set_trace()
+        #state = cuda(torch.tensor(np.expand_dims(state, 0)).float())
+        with torch.no_grad():
+            policy = self.forward(state, apply_softmax = True)[0]
+        dist = FixedCategorical(policy)
+        return dist.sample()

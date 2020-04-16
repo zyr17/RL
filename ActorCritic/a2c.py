@@ -16,35 +16,6 @@ from common.envs import TransposeImage, make_vec_envs
 from common.models import AtariCNN, ActorCriticNet
 from common.utils import cuda, Fake_TXSW
 from common.storage import RolloutStorage
-from common.distributions import FixedCategorical
-
-try:
-    @profile
-    def emptyfunc():
-        pass
-except:
-    def profile(func):
-        return func
-
-class ReplayBuffer:
-    def __init__(self, maxlen):
-        self.position = 0
-        self.buffer = []
-        self.maxlen = maxlen
-
-    def __len__(self):
-        return len(self.buffer)
-
-    def append(self, data):
-        if len(self.buffer) < self.maxlen:
-            self.buffer.append(data)
-        else:
-            self.buffer[self.position] = data
-            self.position += 1
-
-    def get(self, batch_size):
-        choice = np.random.choice(self.maxlen, batch_size, replace = False)
-        return [self.buffer[x] for x in choice]
 
 class A2C:
     def __init__(self, envs, hiddenlen = 512, threads = 1, log_interval = 100, 
@@ -86,15 +57,6 @@ class A2C:
         self.LOG_INTERVAL = log_interval
         self.EVAL_LENGTH = evaluate_length
 
-    @profile
-    def get_action(self, state):
-        #pdb.set_trace()
-        #state = cuda(torch.tensor(np.expand_dims(state, 0)).float())
-        with torch.no_grad():
-            policy = self.model(state, apply_softmax = True)[0]
-        dist = FixedCategorical(policy)
-        return dist.sample()
-
     def real_update_policy(self):
         #pdb.set_trace()
         #print('reward sum', sum(reward))
@@ -129,7 +91,6 @@ class A2C:
         self.opt.step()
         return loss.item()
     
-    @profile
     def main(self):
         start_time = time.time()
         state = self.env.reset()
@@ -145,8 +106,8 @@ class A2C:
                 self.env.render()
             #pdb.set_trace()
             
-            action = self.get_action(state)
-            next_s, reward, ist, _ = self.env.step(action)
+            action = self.model.get_action(state)
+            next_s, reward, ist, info = self.env.step(action)
             tot_reward += reward
             self.rollouts.insert(next_s, np.zeros((self.threads, 1)), action, np.ones((self.threads, 1)),
                                  np.zeros((self.threads, 1)), reward, np.expand_dims(1 - ist, 1), np.zeros((self.threads, 1)))
@@ -166,7 +127,7 @@ class A2C:
             for num, i in enumerate(ist):
                 if i:
                     # if multilive, don't push to self.PREVIOUS_REWARD. TODO: record every live seperately
-                    if 'ale.lives' in _[num].keys() and _[num]['ale.lives'] > 0:
+                    if 'ale.lives' in info[num].keys() and info[num]['ale.lives'] > 0:
                         continue
                     find_terminate = True
                     self.PREVIOUS_REWARD.append(tot_reward[num].item())
