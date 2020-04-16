@@ -1,5 +1,7 @@
 __pycache__
 */runs/
+runs/
 */models/
-.lprof
+models/
+*.lprof
 */__python__/

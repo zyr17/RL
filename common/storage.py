@@ -74,21 +74,12 @@ class RolloutStorage(object):
     def get_one_flatten(self, arr, length = None):
         if length == None:
             length = self.step
+        if type(arr) is str:
+            arr = vars(self)[arr]
         return arr[:length].reshape(-1, *arr.shape[2:])
 
-    def get_flatten(self):
-        obs = self.get_one_flatten(self.obs)
-        next_obs = self.get_one_flatten(self.obs[1:])
-        recurrent_hidden_states = self.get_one_flatten(self.recurrent_hidden_states)
-        actions = self.get_one_flatten(self.actions)
-        action_log_probs = self.get_one_flatten(self.action_log_probs)
-        value_preds = self.get_one_flatten(self.value_preds)
-        rewards = self.get_one_flatten(self.rewards)
-        masks = self.get_one_flatten(self.masks)
-        bad_masks = self.get_one_flatten(self.bad_masks)
-        returns = self.get_one_flatten(self.returns)
-        return obs, recurrent_hidden_states, actions, action_log_probs, \
-               value_preds, rewards, masks, bad_masks, next_obs, returns
+    def get_flatten(self, *arrs):
+        return tuple(map(self.get_one_flatten, arrs))
 
     def after_update(self):
         self.obs[0].copy_(self.obs[-1])
@@ -105,9 +96,9 @@ class RolloutStorage(object):
                         use_proper_time_limits=True):
         if use_proper_time_limits:
             if use_gae:
-                self.value_preds[-1] = next_value
+                self.value_preds[self.step] = next_value
                 gae = 0
-                for step in reversed(range(self.rewards.size(0))):
+                for step in reversed(range(self.step)):
                     delta = self.rewards[step] + gamma * self.value_preds[
                         step + 1] * self.masks[step +
                                                1] - self.value_preds[step]
@@ -116,16 +107,16 @@ class RolloutStorage(object):
                     gae = gae * self.bad_masks[step + 1]
                     self.returns[step] = gae + self.value_preds[step]
             else:
-                self.returns[-1] = next_value
-                for step in reversed(range(self.rewards.size(0))):
+                self.returns[self.step] = next_value
+                for step in reversed(range(self.step)):
                     self.returns[step] = (self.returns[step + 1] * \
                         gamma * self.masks[step + 1] + self.rewards[step]) * self.bad_masks[step + 1] \
                         + (1 - self.bad_masks[step + 1]) * self.value_preds[step]
         else:
             if use_gae:
                 gae = 0
-                self.returns[-1] = next_value
-                for step in reversed(range(self.rewards.size(0))):
+                self.value_preds[self.step] = next_value
+                for step in reversed(range(self.step)):
                     delta = self.rewards[step] + gamma * self.value_preds[
                         step + 1] * self.masks[step +
                                                1] - self.value_preds[step]
@@ -133,7 +124,7 @@ class RolloutStorage(object):
                                                                   1] * gae
                     self.returns[step] = gae + self.value_preds[step]
             else:
-                self.value_preds[self.step] = next_value
+                self.returns[self.step] = next_value
                 for step in reversed(range(self.step)):
                     self.returns[step] = self.returns[step + 1] * \
                         gamma * self.masks[step + 1] + self.rewards[step]

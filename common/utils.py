@@ -1,14 +1,20 @@
 import torch
 
-ENABLE_CUDA = True
+last_use_cuda = True
 
-def cuda(tensor):
+def cuda(tensor, use_cuda = None):
     """
     A cuda wrapper
     """
+    global last_use_cuda
+    if use_cuda == None:
+        use_cuda = last_use_cuda
+    last_use_cuda = use_cuda
+    if not use_cuda:
+        return tensor
     if tensor is None:
         return None
-    if torch.cuda.is_available() and ENABLE_CUDA:
+    if torch.cuda.is_available():
         return tensor.cuda()
     else:
         return tensor

@@ -16,6 +16,8 @@ from baselines.common.vec_env.shmem_vec_env import ShmemVecEnv
 from baselines.common.vec_env.vec_normalize import \
     VecNormalize as VecNormalize_
 
+from common.utils import cuda
+
 try:
     import dm_control2gym
 except ImportError:
@@ -80,7 +82,6 @@ def make_vec_envs(env_name,
                   num_processes,
                   gamma,
                   log_dir,
-                  device,
                   allow_early_resets,
                   num_frame_stack=None):
     envs = [
@@ -88,7 +89,7 @@ def make_vec_envs(env_name,
         for i in range(num_processes)
     ]
 
-    if False and len(envs) > 1:
+    if len(envs) > 1:
         envs = ShmemVecEnv(envs, context='fork')
     else:
         envs = DummyVecEnv(envs)
@@ -99,12 +100,12 @@ def make_vec_envs(env_name,
         else:
             envs = VecNormalize(envs, gamma=gamma)
 
-    envs = VecPyTorch(envs, device)
+    envs = VecPyTorch(envs)
 
     if num_frame_stack is not None:
-        envs = VecPyTorchFrameStack(envs, num_frame_stack, device)
+        envs = VecPyTorchFrameStack(envs, num_frame_stack)
     elif len(envs.observation_space.shape) == 3:
-        envs = VecPyTorchFrameStack(envs, 4, device)
+        envs = VecPyTorchFrameStack(envs, 4)
 
     return envs
 
@@ -160,15 +161,14 @@ class TransposeImage(TransposeObs):
 
 
 class VecPyTorch(VecEnvWrapper):
-    def __init__(self, venv, device):
+    def __init__(self, venv):
         """Return only every `skip`-th frame"""
         super(VecPyTorch, self).__init__(venv)
-        self.device = device
         # TODO: Fix data types
 
     def reset(self):
         obs = self.venv.reset()
-        obs = torch.from_numpy(obs).float().to(self.device)
+        obs = cuda(torch.from_numpy(obs).float())
         return obs
 
     def step_async(self, actions):
@@ -180,7 +180,7 @@ class VecPyTorch(VecEnvWrapper):
 
     def step_wait(self):
         obs, reward, done, info = self.venv.step_wait()
-        obs = torch.from_numpy(obs).float().to(self.device)
+        obs = cuda(torch.from_numpy(obs).float())
         reward = torch.from_numpy(reward).unsqueeze(dim=1).float()
         return obs, reward, done, info
 
@@ -211,7 +211,7 @@ class VecNormalize(VecNormalize_):
 # Derived from
 # https://github.com/openai/baselines/blob/master/baselines/common/vec_env/vec_frame_stack.py
 class VecPyTorchFrameStack(VecEnvWrapper):
-    def __init__(self, venv, nstack, device=None):
+    def __init__(self, venv, nstack):
         self.venv = venv
         self.nstack = nstack
 
@@ -221,10 +221,8 @@ class VecPyTorchFrameStack(VecEnvWrapper):
         low = np.repeat(wos.low, self.nstack, axis=0)
         high = np.repeat(wos.high, self.nstack, axis=0)
 
-        if device is None:
-            device = torch.device('cpu')
-        self.stacked_obs = torch.zeros((venv.num_envs, ) +
-                                       low.shape).to(device)
+        self.stacked_obs = cuda(torch.zeros((venv.num_envs, ) +
+                                            low.shape))
 
         observation_space = gym.spaces.Box(
             low=low, high=high, dtype=venv.observation_space.dtype)
